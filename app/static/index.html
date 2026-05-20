@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rag-tax prototype</title>
+  <style>
+    :root {
+      --bg: #f4f0e8;
+      --panel: #fffaf2;
+      --ink: #20201d;
+      --muted: #6d685d;
+      --line: #d5ccb9;
+      --accent: #8f3d24;
+      --accent-soft: #f2dfd7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Apple SD Gothic Neo", serif;
+      color: var(--ink);
+      background: linear-gradient(180deg, #f7f3ec 0%, var(--bg) 100%);
+    }
+    .shell {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+    .hero {
+      padding: 28px;
+      border: 1px solid var(--line);
+      background: radial-gradient(circle at top right, #f7e2d2 0, var(--panel) 45%);
+      border-radius: 20px;
+      box-shadow: 0 14px 40px rgba(99, 68, 42, 0.08);
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    .hero p { color: var(--muted); max-width: 780px; line-height: 1.6; }
+    .search-form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .search-form input, .search-form button, .filters select {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      padding: 14px 16px;
+      font: inherit;
+      background: #fffefb;
+    }
+    .search-form button {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+      cursor: pointer;
+    }
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+      gap: 20px;
+      margin-top: 24px;
+      align-items: start;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 20px;
+      padding: 22px;
+      box-shadow: 0 10px 30px rgba(99, 68, 42, 0.06);
+    }
+    .panel h2 {
+      font-size: 1rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .summary-text {
+      white-space: pre-wrap;
+      line-height: 1.7;
+      margin-bottom: 14px;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 10px 0;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      padding: 8px 12px;
+      font-size: 0.9rem;
+    }
+    .warning { background: var(--accent-soft); color: var(--accent); border-color: #e7c0b2; }
+    .results { display: grid; gap: 14px; }
+    .result {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      background: #fffdfa;
+    }
+    .result h3 { margin-bottom: 8px; font-size: 1.08rem; }
+    .meta {
+      color: var(--muted);
+      font-size: 0.93rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .result button {
+      margin-top: 12px;
+      border: 0;
+      border-radius: 10px;
+      background: #2d2b27;
+      color: white;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+    .document-view {
+      white-space: pre-wrap;
+      line-height: 1.65;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      min-height: 220px;
+    }
+    .empty { color: var(--muted); }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .search-form { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <h1>법인세 세무조정 검색 프로토타입</h1>
+      <p>샘플 법령, 행정해석, 판례 데이터를 대상으로 하이브리드 점수 기반 검색과 인용 포함 요약, 원문 전문 확인 흐름을 보여주는 최소 실행 버전입니다.</p>
+      <form class="search-form" id="search-form">
+        <input id="query" name="query" value="업무무관자산 지급이자 손금불산입" aria-label="검색어">
+        <button type="submit">검색</button>
+      </form>
+      <div class="filters">
+        <select id="doc-type">
+          <option value="">모든 문서유형</option>
+          <option value="statute">법령</option>
+          <option value="ruling">행정해석</option>
+          <option value="case">판례</option>
+        </select>
+        <select id="sort">
+          <option value="relevance">관련도순</option>
+          <option value="latest">최신순</option>
+        </select>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>AI 요약</h2>
+        <div id="summary-text" class="summary-text empty">검색을 실행하면 근거 기반 요약이 여기에 표시됩니다.</div>
+        <div id="summary-citations" class="chips"></div>
+        <div id="summary-warnings" class="chips"></div>
+        <h2 style="margin-top:24px;">검색 결과</h2>
+        <div id="results" class="results"></div>
+      </section>
+
+      <aside class="panel">
+        <h2>원문 보기</h2>
+        <div id="document-meta" class="meta empty">오른쪽 패널은 결과 카드의 "전문 보기" 버튼으로 채워집니다.</div>
+        <div id="document-view" class="document-view empty">아직 선택된 문서가 없습니다.</div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('search-form');
+    const resultsEl = document.getElementById('results');
+    const summaryTextEl = document.getElementById('summary-text');
+    const summaryCitationsEl = document.getElementById('summary-citations');
+    const summaryWarningsEl = document.getElementById('summary-warnings');
+    const documentMetaEl = document.getElementById('document-meta');
+    const documentViewEl = document.getElementById('document-view');
+
+    function renderChips(target, items, className = 'chip') {
+      target.innerHTML = '';
+      items.forEach((item) => {
+        const span = document.createElement('span');
+        span.className = className;
+        span.textContent = item;
+        target.appendChild(span);
+      });
+    }
+
+    async function loadDocument(documentId) {
+      const response = await fetch(`/api/documents/${documentId}`);
+      const payload = await response.json();
+      documentMetaEl.className = 'meta';
+      documentMetaEl.innerHTML = [
+        payload.document.title,
+        payload.document.docType,
+        payload.document.authority,
+        payload.version.versionLabel,
+      ].map((value) => `<span>${value}</span>`).join('');
+      documentViewEl.className = 'document-view';
+      documentViewEl.textContent = payload.version.rawText;
+    }
+
+    function renderResults(items) {
+      resultsEl.innerHTML = '';
+      if (!items.length) {
+        resultsEl.innerHTML = '<div class="empty">검색 결과가 없습니다.</div>';
+        return;
+      }
+      items.forEach((item) => {
+        const article = document.createElement('article');
+        article.className = 'result';
+        article.innerHTML = `
+          <h3>${item.title} ${item.sectionRef ? `· ${item.sectionRef}` : ''}</h3>
+          <div class="meta">
+            <span>${item.docTypeLabel}</span>
+            <span>${item.authorityLabel}</span>
+            <span>${item.date}</span>
+            <span>score ${item.score}</span>
+          </div>
+          <div>${item.snippet}</div>
+          <button type="button">전문 보기</button>
+        `;
+        article.querySelector('button').addEventListener('click', () => loadDocument(item.documentId));
+        resultsEl.appendChild(article);
+      });
+    }
+
+    async function runSearch(event) {
+      if (event) {
+        event.preventDefault();
+      }
+      const query = document.getElementById('query').value.trim();
+      const docType = document.getElementById('doc-type').value;
+      const sort = document.getElementById('sort').value;
+
+      const payload = {
+        query,
+        sort,
+        filters: {
+          docTypes: docType ? [docType] : null,
+        },
+      };
+
+      const response = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      summaryTextEl.className = 'summary-text';
+      summaryTextEl.textContent = data.summary.text;
+      renderChips(summaryCitationsEl, data.summary.citations.map((citation) => `${citation.id}${citation.anchors.length ? ` · ${citation.anchors.join(', ')}` : ''}`));
+      renderChips(summaryWarningsEl, data.summary.warnings || [], 'chip warning');
+      renderResults(data.results || []);
+    }
+
+    form.addEventListener('submit', runSearch);
+    runSearch();
+  </script>
+</body>
+</html>

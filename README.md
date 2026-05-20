@@ -8,6 +8,13 @@
 - [평가셋/품질평가 설계](docs/evaluation-plan.md)
 - [문서 수집/업데이트 구현 계획서](docs/ingestion-update-implementation-plan.md)
 
+## 프로토타입 실행
+1. `uv sync`
+2. `uv run uvicorn app.main:app --reload`
+3. 브라우저에서 `http://127.0.0.1:8000` 접속
+
+샘플 데이터 기반으로 검색, 요약, 원문 조회 흐름을 확인할 수 있습니다.
+
 ## 목표 요약
 - 특정 쟁점에 대한 법령 조항, 행정해석, 판례를 정교하게 검색
 - 원문 전문과 메타데이터를 함께 제공해 검증 가능성 확보
