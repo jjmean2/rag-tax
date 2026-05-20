@@ -1,0 +1,7 @@
+{
+  "github.copilot.chat.commitMessageGeneration.instructions": [
+    {
+      "text": "Use Conventional Commits v1.0.0 format (<type>: <description>)."
+    }
+  ]
+}
