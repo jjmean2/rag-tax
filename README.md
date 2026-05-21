@@ -17,14 +17,26 @@
 
 샘플 데이터 기반으로 검색, 요약, 원문 조회 흐름을 확인할 수 있습니다.
 
-## Docker Compose 로컬 DB
-1. `docker compose up -d db`
-2. `docker compose run --rm db-init`
-3. `export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/rag_tax`
-4. `uv run uvicorn app.main:app --reload`
+## 로컬 개발 환경 시작
 
-한 번에 실행하려면 `docker compose up db db-init`을 사용할 수 있습니다.
-`db-init`은 스키마 생성과 샘플 데이터 적재를 담당하는 일회성 컨테이너입니다.
+```bash
+make install     # 의존성 설치
+make db-up       # 개발 DB 시작
+make db-init     # 최초 1회: 스키마 생성 + 샘플 시드
+make dev         # 앱 서버 실행 → http://127.0.0.1:8000
+```
+
+DB 데이터를 완전 초기화하려면:
+```bash
+make db-reset
+```
+
+사용 가능한 모든 태스크 목록:
+```bash
+make help
+```
+
+`db-init`은 `tools` 프로파일로 분리되어 있어 `make db-up`(기본 `docker compose up`)에서 자동 실행되지 않습니다. 필요할 때만 `make db-init`으로 명시 실행합니다.
 
 ## 목표 요약
 - 특정 쟁점에 대한 법령 조항, 행정해석, 판례를 정교하게 검색

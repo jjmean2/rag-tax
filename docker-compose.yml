@@ -1,7 +1,6 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: rag-tax-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -19,7 +18,7 @@ services:
 
   db-init:
     image: python:3.11-slim
-    container_name: rag-tax-db-init
+    profiles: ["tools"]
     depends_on:
       db:
         condition: service_healthy
