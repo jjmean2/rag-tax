@@ -10,10 +10,21 @@
 
 ## 프로토타입 실행
 1. `uv sync`
-2. `uv run uvicorn app.main:app --reload`
-3. 브라우저에서 `http://127.0.0.1:8000` 접속
+2. PostgreSQL 준비 후 `DATABASE_URL` 설정
+3. `uv run python -m app.bootstrap init-and-seed`
+4. `uv run uvicorn app.main:app --reload`
+5. 브라우저에서 `http://127.0.0.1:8000` 접속
 
 샘플 데이터 기반으로 검색, 요약, 원문 조회 흐름을 확인할 수 있습니다.
+
+## Docker Compose 로컬 DB
+1. `docker compose up -d db`
+2. `docker compose run --rm db-init`
+3. `export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/rag_tax`
+4. `uv run uvicorn app.main:app --reload`
+
+한 번에 실행하려면 `docker compose up db db-init`을 사용할 수 있습니다.
+`db-init`은 스키마 생성과 샘플 데이터 적재를 담당하는 일회성 컨테이너입니다.
 
 ## 목표 요약
 - 특정 쟁점에 대한 법령 조항, 행정해석, 판례를 정교하게 검색
