@@ -20,9 +20,10 @@ class PostgresStore:
         self.dsn = dsn or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 
     @contextmanager
-    def connect(self):
+    def connect(self, register_pgvector: bool = True):
         with psycopg.connect(self.dsn, row_factory=dict_row) as connection:
-            register_vector(connection)
+            if register_pgvector:
+                register_vector(connection)
             yield connection
 
     def init_schema(self) -> None:
@@ -120,7 +121,8 @@ class PostgresStore:
         );
         """
 
-        with self.connect() as connection:
+        # The vector extension may not exist yet on a fresh database.
+        with self.connect(register_pgvector=False) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(ddl)
             connection.commit()

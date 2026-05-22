@@ -27,22 +27,16 @@ services:
       ADMINER_DEFAULT_SERVER: db
 
   db-init:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.db-init
     profiles: ["tools"]
     depends_on:
       db:
         condition: service_healthy
-    working_dir: /workspace
-    volumes:
-      - .:/workspace
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/rag_tax
-    command:
-      - sh
-      - -lc
-      - |
-        python -m pip install --no-cache-dir "psycopg[binary]>=3.2,<4.0" &&
-        python -m app.bootstrap init-and-seed
+    command: ["uv", "run", "python", "-m", "app.bootstrap", "init-and-seed"]
     restart: "no"
 
 volumes:

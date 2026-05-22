@@ -18,12 +18,13 @@ db-down:        ## 개발 DB 중단 (데이터 유지)
 	docker compose stop db
 
 db-init:        ## 스키마 생성 + 샘플 시드 (최초 1회 또는 리셋 후)
+	docker compose build db-init
 	docker compose --profile tools run --rm db-init
 
 db-reset:       ## DB 볼륨 삭제 후 초기화 (데이터 전체 삭제)
 	docker compose down -v
 	docker compose up -d db
-	docker compose --profile tools run --rm db-init
+	$(MAKE) db-init
 
 lint:           ## 코드 스타일 검사 (ruff)
 	uv run ruff check app

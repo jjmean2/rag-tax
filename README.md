@@ -38,6 +38,7 @@ make help
 ```
 
 `db-init`은 `tools` 프로파일로 분리되어 있어 `make db-up`(기본 `docker compose up`)에서 자동 실행되지 않습니다. 필요할 때만 `make db-init`으로 명시 실행합니다.
+`make db-init`은 `Dockerfile.db-init` 이미지를 빌드한 뒤 실행하며, 의존성은 `pyproject.toml`/`uv.lock` 기준으로 동기화됩니다. 개별 `pip install ...` 하드코딩 없이 의존성 변경이 반영됩니다.
 DB 이미지는 pgvector 확장을 포함한 `pgvector/pgvector:pg16`를 사용합니다.
 
 웹 기반 DB 탐색이 필요하면 Adminer를 사용합니다.
