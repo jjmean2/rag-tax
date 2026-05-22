@@ -6,7 +6,11 @@ from datetime import date
 from typing import Any
 
 import psycopg
+from pgvector import Vector
+from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
+
+from app.embeddings import embed_texts
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/rag_tax"
 
@@ -18,10 +22,13 @@ class PostgresStore:
     @contextmanager
     def connect(self):
         with psycopg.connect(self.dsn, row_factory=dict_row) as connection:
+            register_vector(connection)
             yield connection
 
     def init_schema(self) -> None:
         ddl = """
+        CREATE EXTENSION IF NOT EXISTS vector;
+
         CREATE TABLE IF NOT EXISTS documents (
           id                 TEXT PRIMARY KEY,
           source_system      TEXT NOT NULL,
@@ -63,14 +70,21 @@ class PostgresStore:
           section_ref       TEXT,
           heading           TEXT,
           content           TEXT NOT NULL,
+                    embedding         VECTOR(384),
           order_no          INT NOT NULL,
           token_count       INT,
           metadata_json     JSONB NOT NULL DEFAULT '{}'::jsonb,
           created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+                ALTER TABLE IF EXISTS document_sections
+                    ADD COLUMN IF NOT EXISTS embedding VECTOR(384);
+
         CREATE INDEX IF NOT EXISTS idx_document_sections_version_order
         ON document_sections (version_id, order_no);
+
+                CREATE INDEX IF NOT EXISTS idx_document_sections_embedding
+                ON document_sections USING hnsw (embedding vector_cosine_ops);
 
         CREATE TABLE IF NOT EXISTS citations (
           id              TEXT PRIMARY KEY,
@@ -180,16 +194,17 @@ class PostgresStore:
                             cursor.execute(
                                 """
                                 INSERT INTO document_sections (
-                                  id, version_id, parent_section_id, section_type, section_ref,
-                                  heading, content, order_no, token_count, metadata_json
+                                                                    id, version_id, parent_section_id, section_type, section_ref,
+                                                                    heading, content, embedding, order_no, token_count, metadata_json
                                 )
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                                                                VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s, %s, %s::jsonb)
                                 ON CONFLICT (id) DO UPDATE
                                 SET parent_section_id = EXCLUDED.parent_section_id,
                                     section_type = EXCLUDED.section_type,
                                     section_ref = EXCLUDED.section_ref,
                                     heading = EXCLUDED.heading,
                                     content = EXCLUDED.content,
+                                                                        embedding = EXCLUDED.embedding,
                                     order_no = EXCLUDED.order_no,
                                     token_count = EXCLUDED.token_count,
                                     metadata_json = EXCLUDED.metadata_json
@@ -233,6 +248,56 @@ class PostgresStore:
                     )
 
             connection.commit()
+
+    def ensure_section_embeddings(self) -> int:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT ds.id,
+                           d.title,
+                           ds.section_ref,
+                           ds.heading,
+                           ds.content
+                    FROM document_sections ds
+                    JOIN document_versions dv ON dv.id = ds.version_id
+                    JOIN documents d ON d.id = dv.document_id
+                    WHERE ds.embedding IS NULL
+                    ORDER BY ds.created_at, ds.id
+                    """
+                )
+                rows = cursor.fetchall()
+
+                if not rows:
+                    return 0
+
+                texts = [
+                    " ".join(
+                        part
+                        for part in (
+                            row["title"],
+                            row["section_ref"] or "",
+                            row["heading"] or "",
+                            row["content"],
+                        )
+                        if part
+                    )
+                    for row in rows
+                ]
+                embeddings = embed_texts(texts)
+
+                for row, embedding in zip(rows, embeddings, strict=True):
+                    cursor.execute(
+                        """
+                        UPDATE document_sections
+                        SET embedding = %s
+                        WHERE id = %s
+                        """,
+                        (Vector(embedding), row["id"]),
+                    )
+
+            connection.commit()
+            return len(rows)
 
     def _chosen_versions(
         self,
@@ -317,6 +382,7 @@ class PostgresStore:
         as_of: date | None,
         doc_types: list[str] | None,
         authorities: list[str] | None,
+        query_embedding: list[float] | None,
     ) -> list[dict[str, Any]]:
         chosen_versions = self._chosen_versions(as_of, doc_types, authorities)
         if not chosen_versions:
@@ -327,20 +393,40 @@ class PostgresStore:
 
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id,
-                           version_id,
-                           section_type,
-                           section_ref,
-                           heading,
-                           content,
-                           order_no
-                    FROM document_sections
-                    WHERE version_id = ANY(%s::text[])
-                    """,
-                    (version_ids,),
-                )
+                if query_embedding is None:
+                    cursor.execute(
+                        """
+                        SELECT id,
+                               version_id,
+                               section_type,
+                               section_ref,
+                               heading,
+                               content,
+                               order_no,
+                               0.0::double precision AS semantic_score
+                        FROM document_sections
+                        WHERE version_id = ANY(%s::text[])
+                        """,
+                        (version_ids,),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT id,
+                               version_id,
+                               section_type,
+                               section_ref,
+                               heading,
+                               content,
+                               order_no,
+                               1 - (embedding <=> %s) AS semantic_score
+                        FROM document_sections
+                        WHERE version_id = ANY(%s::text[])
+                          AND embedding IS NOT NULL
+                        ORDER BY embedding <=> %s, order_no
+                        """,
+                        (Vector(query_embedding), version_ids, Vector(query_embedding)),
+                    )
                 sections = cursor.fetchall()
 
                 section_ids = [section["id"] for section in sections]
@@ -382,6 +468,7 @@ class PostgresStore:
                     "sectionRef": section["section_ref"],
                     "heading": section["heading"],
                     "snippet": section["content"],
+                    "semanticScore": float(section.get("semantic_score") or 0.0),
                     "citations": citations_by_section.get(section["id"], []),
                 }
             )

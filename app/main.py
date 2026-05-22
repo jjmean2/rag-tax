@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.embeddings import embed_text
 from app.storage import PostgresStore
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -70,15 +71,6 @@ def keyword_score(
     return score
 
 
-def semantic_score(query_tokens: list[str], section: dict[str, Any]) -> float:
-    content_tokens = set(tokenize(section["snippet"]))
-    if not query_tokens or not content_tokens:
-        return 0.0
-    intersection = len(content_tokens.intersection(query_tokens))
-    union = len(content_tokens.union(query_tokens))
-    return intersection / union if union else 0.0
-
-
 def build_summary(query: str, ranked_results: list[dict[str, Any]]) -> dict[str, Any]:
     if not ranked_results:
         return {
@@ -130,20 +122,31 @@ def search(request: SearchRequest) -> dict[str, Any]:
     filters = request.filters or SearchFilters()
 
     try:
+        STORE.ensure_section_embeddings()
+        query_embedding = embed_text(request.query)
         sections = STORE.search_sections(
             as_of=request.asOfDate,
             doc_types=filters.docTypes,
             authorities=filters.authority,
+            query_embedding=query_embedding,
         )
     except psycopg.Error as error:
         raise HTTPException(
             status_code=503,
             detail=f"Database unavailable. Ensure schema is initialized and DATABASE_URL is reachable. {error}",
         ) from error
+    except Exception as error:
+        query_embedding = None
+        sections = STORE.search_sections(
+            as_of=request.asOfDate,
+            doc_types=filters.docTypes,
+            authorities=filters.authority,
+            query_embedding=query_embedding,
+        )
 
     for section in sections:
         kw_score = keyword_score(query_tokens, section, section["title"])
-        sem_score = semantic_score(query_tokens, section)
+        sem_score = section.get("semanticScore", 0.0)
         combined_score = kw_score * 0.75 + sem_score * 4.0
         if math.isclose(combined_score, 0.0):
             continue
@@ -183,6 +186,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
         "results": ranked_results[:10],
         "debug": {
             "queryTokens": query_tokens,
+            "semanticSearch": True,
             "totalMatches": len(ranked_results),
         },
     }
