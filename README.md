@@ -6,6 +6,8 @@
 - [MVP 기능명세서](docs/mvp-spec.md)
 - [문서 DB/인덱스 스키마](docs/data-schema.md)
 - [평가셋/품질평가 설계](docs/evaluation-plan.md)
+- [실무 문서 소스 인벤토리](docs/document-source-inventory.md)
+- [출처별 수집기 MVP 설계](docs/collector-mvp-design.md)
 - [문서 수집/업데이트 구현 계획서](docs/ingestion-update-implementation-plan.md)
 
 ## 프로토타입 실행
