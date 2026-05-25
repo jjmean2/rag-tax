@@ -26,6 +26,22 @@ db-reset:       ## DB 볼륨 삭제 후 초기화 (데이터 전체 삭제)
 	docker compose up -d db
 	$(MAKE) db-init
 
+db-ui:          ## DB 웹 인터페이스
+	docker compose up -d adminer
+
+
+ingest:         ## 법제처 법령 수집 + 임베딩 (LAW_API_KEY 필수)
+	LAW_API_KEY=$(LAW_API_KEY) DATABASE_URL=$(DATABASE_URL) uv run python -m app.ingestion.runner
+
+ingest-dry:     ## 수집 파싱 테스트 (DB 반영 없음)
+	LAW_API_KEY=$(LAW_API_KEY) uv run python -m app.ingestion.runner --dry-run
+
+ingest-debug:   ## API 요청/응답 원문 출력 (dry-run 포함)
+	LAW_API_KEY=$(LAW_API_KEY) uv run python -m app.ingestion.runner --dry-run --debug
+
+ingest-embed:   ## 미완료 임베딩만 생성
+	DATABASE_URL=$(DATABASE_URL) uv run python -m app.ingestion.runner --embed-only
+
 lint:           ## 코드 스타일 검사 (ruff)
 	uv run ruff check app
 

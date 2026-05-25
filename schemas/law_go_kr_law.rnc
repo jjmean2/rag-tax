@@ -1,0 +1,114 @@
+# 법제처 국가법령정보 Open API
+# lawService.do?target=law&MST=... 응답 스키마
+# 실제 응답 XML(948 KB) 구조 분석 기반 — 2026-05
+# 파싱 참고 / Agent 컨텍스트용. 기계 검증 목적 아님.
+#
+# & : interleave — 나열된 요소 모두 포함, 순서 무관  (xs:all 상당)
+# * : 0회 이상 반복
+# + : 1회 이상 반복
+# ? : 0 또는 1회
+
+default namespace = ""
+
+start = 법령
+
+# ─────────────────────────────────────────────────────────
+# 루트
+# ─────────────────────────────────────────────────────────
+법령 = element 법령 {
+  attribute 법령키 { text }?,
+  element 개정문 { element 개정문내용 { text }? }?,
+  기본정보,
+  element 제개정이유 { element 제개정이유내용 { text }? }?,
+  element 조문 { 조문단위+ },
+  element 부칙 { 부칙단위* }?
+}
+
+# ─────────────────────────────────────────────────────────
+# 기본정보  — 단일 키-값 쌍, 순서 무관 (&)
+# ─────────────────────────────────────────────────────────
+기본정보 = element 기본정보 {
+    element 법령ID         { text }                            # "001563"
+  & element 법령명_한글    { text }                            # "법인세법"
+  & element 법령명_한자    { text }?
+  & element 법령명약칭     { text }?
+  & element 법종구분 {                                         # "법률" | "대통령령" | …
+      attribute 법종구분코드 { text }?,
+      text
+    }?
+  & element 소관부처 {                                         # "재정경제부"
+      attribute 소관부처코드 { text }?,                        # "1053000"
+      text
+    }
+  & element 공포번호       { text }?                           # "21065"
+  & element 공포일자       { text }?                           # YYYYMMDD
+  & element 시행일자       { text }?                           # YYYYMMDD
+  & element 제개정구분     { text }?                           # "타법개정" | "일부개정" | …
+  & element 공포법령여부   { text }?                           # "Y" | "N"
+  & element 별표편집여부   { text }?
+  & element 제명변경여부   { text }?
+  & element 한글법령여부   { text }?
+  & element 언어           { text }?                           # "한글"
+  & element 편장절관       { text }?
+  & element 전화번호       { text }?
+  & element 공동부령정보   { text }?
+  & element 조문시행일자문자열 { text }?
+  & element 연락부서 {
+      element 부서단위 {
+        attribute 부서키 { text }?,
+        element 부서명       { text }?
+        & element 부서연락처 { text }?
+        & element 소관부처명 { text }?
+        & element 소관부처코드 { text }?
+      }*
+    }?
+}
+
+# ─────────────────────────────────────────────────────────
+# 조문단위  — 스칼라 필드 + 반복 항 혼재 → & 로 순서 무관 처리
+# ─────────────────────────────────────────────────────────
+조문단위 = element 조문단위 {
+  attribute 조문키 { text }?,
+    element 조문번호      { text }                             # "19"
+  & element 조문가지번호  { text }?                            # "2" → 제19조의2
+  & element 조문제목      { text }?                            # "손금의 범위"
+  & element 조문여부      { text }                             # "전문" | "삭제"
+                                                               # 파서: "삭제" 건너뜀
+  & element 조문내용      { text }?
+  & element 조문시행일자  { text }?                            # YYYYMMDD
+  & element 조문변경여부  { text }?                            # "Y" | "N"
+  & element 조문이동이전  { text }?
+  & element 조문이동이후  { text }?
+  & element 조문참고자료  { text }?
+  & 항*
+}
+
+항 = element 항 {
+    element 항번호              { text }                       # "①" "②" …
+  & element 항내용              { text }?
+  & element 항제개정유형        { text }?
+  & element 항제개정일자문자열  { text }?
+  & 호*
+}
+
+호 = element 호 {
+    element 호번호      { text }                               # "1." "2." …
+  & element 호가지번호  { text }?
+  & element 호내용      { text }?
+  & 목*
+}
+
+목 = element 목 {
+  element 목번호 { text },                                     # "가." "나." …
+  element 목내용 { text }?
+}
+
+# ─────────────────────────────────────────────────────────
+# 부칙
+# ─────────────────────────────────────────────────────────
+부칙단위 = element 부칙단위 {
+  attribute 부칙키 { text }?,
+    element 부칙공포번호 { text }?
+  & element 부칙공포일자 { text }?                             # YYYYMMDD
+  & element 부칙내용     { text }?
+}
