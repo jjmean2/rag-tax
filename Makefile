@@ -1,5 +1,6 @@
 .PHONY: help dev db-up db-down db-init db-reset db-ui install lint test \
-        ingest ingest-collect ingest-dry ingest-debug ingest-embed
+        ingest ingest-collect ingest-dry ingest-debug ingest-embed \
+        eval
 
 # .env 파일이 있으면 읽어들임 (없어도 에러 없음)
 # 시작 전: cp .env.example .env 후 키 값 채우기
@@ -52,6 +53,9 @@ ingest-chunk-dry: ## 청킹 계획 출력 (API 호출 없음, DB 필요)
 
 ingest-verify:    ## 임베딩 커버리지 검증 (고아 노드 및 parent-chunk 정합성 확인)
 	uv run python -m app.ingestion.runner --verify-embed
+
+eval:           ## 검색 품질 평가 Recall@K (uvicorn 실행 중이어야 함)
+	uv run python eval/run_eval.py
 
 lint:           ## 코드 스타일 검사 + 포맷 검사 (ruff)
 	uv run ruff check app
