@@ -1,7 +1,7 @@
 {
   "github.copilot.chat.commitMessageGeneration.instructions": [
     {
-      "text": "Use Conventional Commits format (<type>(<scope>): <subject>).\n\n1. HEADER RULE:\n- Write the header strictly in English.\n- Use the imperative mood (e.g., 'Fix...', 'Add...', 'Refactor...') and do not end with a period.\n- Keep it under 50 characters.\n\n2. BODY RULE:\n- Default to a single-line commit. Do NOT generate a body for simple, standard, or self-explanatory changes.\n- Generate a body strictly in Korean ONLY for complex logic changes, breaking changes, or critical bug fixes that require context.\n- When writing the body, focus strictly on 'Why' this change was made, keep it extremely concise, and separate it from the header with a blank line."
+      "text": "Use Conventional Commits format (<type>(<scope>): <subject>).\n\n1. HEADER RULE:\n- Write the header strictly in English.\n- Use the imperative mood, starting with a lowercase verb (e.g., 'fix...', 'add...', 'refactor...'), and do not end with a period.\n- Keep it under 50 characters.\n\n2. BODY RULE:\n- Default to a single-line commit. Do NOT generate a body for simple, standard, or self-explanatory changes.\n- Generate a body strictly in Korean ONLY for complex logic changes, breaking changes, or critical bug fixes that require context.\n- When writing the body, focus strictly on 'Why' this change was made, keep it extremely concise, and separate it from the header with a blank line."
     }
   ]
 }
