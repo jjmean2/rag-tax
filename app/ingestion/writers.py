@@ -82,6 +82,17 @@ def _print_chunk_plan(
         sys.exit(0)
 
 
+def _get_descendants(node_id: str, children_map: dict) -> set[str]:
+    """children_map 기준 node_id의 모든 자손 ID를 반환한다."""
+    result: set[str] = set()
+    stack = list(children_map.get(node_id, []))
+    while stack:
+        child = stack.pop()
+        result.add(child)
+        stack.extend(children_map.get(child, []))
+    return result
+
+
 def _assign_chunks(
     node_id: str,
     nodes_by_id: dict,
@@ -301,7 +312,13 @@ class IngestWriter:
             return 0
 
         chunk_root_ids = {nid for nid, _ in chunk_assignments}
-        covered_ids = list({r["id"] for r in rows} - chunk_root_ids)
+        # 처리된 청크 루트의 자손만 covered로 마킹한다.
+        # rows 전체에서 chunk_root_ids를 뺀 값을 쓰면 limit 적용 시
+        # 미처리 청크의 노드까지 parent-chunk로 마킹되는 버그가 생긴다.
+        covered_ids = list(
+            {desc for nid in chunk_root_ids for desc in _get_descendants(nid, children_map)}
+            - chunk_root_ids
+        )
 
         if dry_run:
             _print_chunk_plan(chunk_assignments, covered_ids)
