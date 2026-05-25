@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections import defaultdict
 
 import psycopg
 import psycopg.rows
@@ -15,6 +16,86 @@ from app.ingestion.models import RawDocument
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/rag_tax"
 EMBED_BATCH_SIZE = 256
+TOKEN_LIMIT = 400  # 청크당 최대 토큰 수 (어절 기준 추정)
+
+
+# ---------------------------------------------------------------------------
+# 청크 할당 헬퍼 (모듈 레벨 순수 함수)
+# ---------------------------------------------------------------------------
+
+
+def _token_estimate(text: str) -> int:
+    """어절 수 기반 토큰 수 추정."""
+    return len(text.split())
+
+
+def _format_node_line(node: dict) -> str:
+    """노드 한 줄 텍스트: 'ref (title) content' 형태."""
+    ref = node.get("ref") or ""
+    title = f" ({node['title']})" if node.get("title") else ""
+    content = node.get("content") or ""
+    return f"{ref}{title} {content}".strip()
+
+
+def _build_subtree_text(
+    node_id: str,
+    nodes_by_id: dict,
+    children_map: dict,
+    _indent: int = 0,
+) -> str:
+    """노드와 모든 자손의 텍스트를 들여쓰기 포함해 조립한다."""
+    node = nodes_by_id[node_id]
+    pad = "  " * _indent
+    line = _format_node_line(node)
+    parts = [f"{pad}{line}"] if line else []
+    for child_id in children_map.get(node_id, []):
+        child_text = _build_subtree_text(child_id, nodes_by_id, children_map, _indent + 1)
+        if child_text:
+            parts.append(child_text)
+    return "\n".join(parts)
+
+
+def _assign_chunks(
+    node_id: str,
+    nodes_by_id: dict,
+    children_map: dict,
+    token_limit: int,
+    context_prefix: str = "",
+) -> list[tuple[str, str]]:
+    """depth-agnostic 바텀업 청크 할당.
+
+    노드와 모든 자손을 합친 텍스트가 token_limit 이내이면 이 노드를 청크 루트로 확정.
+    초과하면 자식 각각에 재귀 적용하고, 현재 노드의 텍스트를 자식 청크의 컨텍스트 프리픽스로 추가.
+
+    반환: [(chunk_root_node_id, embed_text), ...]
+    """
+    children = children_map.get(node_id, [])
+    subtree_text = _build_subtree_text(node_id, nodes_by_id, children_map)
+
+    if not subtree_text.strip():
+        return []
+
+    candidate = f"{context_prefix}\n{subtree_text}".strip() if context_prefix else subtree_text
+
+    if _token_estimate(candidate) <= token_limit or not children:
+        # 토큰 한계 이내이거나 리프 노드 → 이 노드가 청크 루트
+        return [(node_id, candidate)]
+
+    # 초과: 자식으로 분기. 현재 노드의 한 줄 텍스트를 자식 청크 프리픽스에 추가
+    own_line = _format_node_line(nodes_by_id[node_id])
+    child_prefix = f"{context_prefix}\n{own_line}".strip() if own_line else context_prefix
+
+    result = []
+    for child_id in sorted(children, key=lambda cid: nodes_by_id[cid]["order_no"]):
+        result.extend(
+            _assign_chunks(child_id, nodes_by_id, children_map, token_limit, child_prefix)
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# IngestWriter
+# ---------------------------------------------------------------------------
 
 
 class IngestWriter:
@@ -92,11 +173,11 @@ class IngestWriter:
                              content, depth, order_no, token_count, metadata_json)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                         ON CONFLICT (id) DO UPDATE
-                        SET content       = EXCLUDED.content,
-                            title         = EXCLUDED.title,
-                            order_no      = EXCLUDED.order_no,
-                            token_count   = EXCLUDED.token_count,
-                            embedding     = NULL,
+                        SET content         = EXCLUDED.content,
+                            title           = EXCLUDED.title,
+                            order_no        = EXCLUDED.order_no,
+                            token_count     = EXCLUDED.token_count,
+                            embedding       = NULL,
                             embedding_model = NULL
                         RETURNING (xmax = 0) AS is_insert
                         """,
@@ -126,73 +207,102 @@ class IngestWriter:
 
     def embed_pending(
         self,
+        token_limit: int = TOKEN_LIMIT,
         batch_size: int = EMBED_BATCH_SIZE,
         model: str = "text-embedding-3-small",
+        limit: int | None = None,
     ) -> int:
-        """embedding IS NULL 인 노드를 일괄 임베딩한다. 처리 수 반환.
+        """미처리 노드를 depth-agnostic 바텀업 청킹으로 임베딩한다. 처리된 청크 수 반환.
 
-        depth <= 1 (조·항) 이고 content 가 있는 노드만 임베딩 대상으로 삼는다.
-        호·목은 너무 짧고 항 임베딩이 커버한다.
+        토큰 한계(token_limit) 이내에서 가능한 한 큰 단위를 청크로 확정하고,
+        초과하면 자식 노드로 재귀한다. 청크에 포함된 자식 노드는 'parent-chunk'로
+        표시해 중복 임베딩을 방지한다.
+        limit 을 지정하면 청크 수를 제한한다 (테스트용).
         """
         from app.embeddings import embed_texts
 
-        with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:
+        with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:  # type: ignore[call-overload]
             with conn.cursor() as cur:
+                # depth 제한 없이 미처리 노드 전체 조회
                 cur.execute(
                     """
-                    SELECT dn.id,
-                           d.title  AS doc_title,
-                           dn.ref,
-                           dn.title AS node_title,
-                           dn.content
+                    SELECT dn.id, dn.parent_id, dn.depth, dn.order_no,
+                           dn.ref, dn.title, dn.content,
+                           d.title AS doc_title
                     FROM document_nodes dn
                     JOIN document_versions dv ON dv.id = dn.version_id
                     JOIN documents d          ON d.id  = dv.document_id
-                    WHERE dn.embedding IS NULL
-                      AND dn.content   IS NOT NULL
-                      AND dn.depth     <= 1
-                    ORDER BY dn.created_at, dn.id
+                    WHERE dn.embedding       IS NULL
+                      AND dn.embedding_model IS NULL
+                    ORDER BY dn.version_id, dn.depth, dn.order_no
                     """
                 )
-                rows = cur.fetchall()
+                rows: list[dict] = cur.fetchall()  # type: ignore[assignment]
 
-            if not rows:
-                return 0
+        if not rows:
+            return 0
 
+        # 트리 구조 구성
+        nodes_by_id: dict[str, dict] = {r["id"]: r for r in rows}
+        children_map: dict[str, list[str]] = defaultdict(list)
+        for r in rows:
+            if r["parent_id"] and r["parent_id"] in nodes_by_id:
+                children_map[r["parent_id"]].append(r["id"])
+
+        # 루트 노드: 부모가 없거나 부모가 이미 처리된(본 배치에 없는) 노드
+        roots = [r for r in rows if not r["parent_id"] or r["parent_id"] not in nodes_by_id]
+
+        # 청크 할당
+        chunk_assignments: list[tuple[str, str]] = []
+        for root in roots:
+            chunk_assignments.extend(
+                _assign_chunks(
+                    root["id"],
+                    nodes_by_id,
+                    children_map,
+                    token_limit,
+                    context_prefix=root["doc_title"] or "",
+                )
+            )
+
+        if limit is not None:
+            chunk_assignments = chunk_assignments[:limit]
+
+        if not chunk_assignments:
+            return 0
+
+        chunk_root_ids = {nid for nid, _ in chunk_assignments}
+        covered_ids = list({r["id"] for r in rows} - chunk_root_ids)
+
+        # 임베딩 생성 및 저장
+        with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:  # type: ignore[call-overload]
             register_vector(conn)
             total = 0
 
-            for i in range(0, len(rows), batch_size):
-                batch = rows[i : i + batch_size]
-                texts = [
-                    " ".join(
-                        filter(
-                            None,
-                            [
-                                r["doc_title"],
-                                r["ref"] or "",
-                                r["node_title"] or "",
-                                r["content"],
-                            ],
-                        )
-                    )
-                    for r in batch
-                ]
+            for i in range(0, len(chunk_assignments), batch_size):
+                batch = chunk_assignments[i : i + batch_size]
+                texts = [text for _, text in batch]
                 embeddings = embed_texts(texts)
 
                 with conn.cursor() as cur:
-                    for row, emb in zip(batch, embeddings, strict=True):
+                    for (node_id, _), emb in zip(batch, embeddings, strict=True):
                         cur.execute(
-                            """
-                            UPDATE document_nodes
-                            SET embedding = %s, embedding_model = %s
-                            WHERE id = %s
-                            """,
-                            (Vector(emb), model, row["id"]),
+                            "UPDATE document_nodes SET embedding=%s, embedding_model=%s WHERE id=%s",
+                            (Vector(emb), model, node_id),
                         )
                 conn.commit()
                 total += len(batch)
-                print(f"  임베딩: {total}/{len(rows)}", end="\r", flush=True)
+                print(f"  임베딩: {total}/{len(chunk_assignments)}", end="\r", flush=True)
 
-            print()
-            return total
+            # 청크에 포함된 자식 노드를 'parent-chunk'로 표시해 재처리 방지
+            if covered_ids:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE document_nodes SET embedding_model = 'parent-chunk'"
+                        " WHERE id = ANY(%s::text[])",
+                        (covered_ids,),
+                    )
+                conn.commit()
+
+        print()
+        return total

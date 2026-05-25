@@ -13,8 +13,6 @@ from pgvector import Vector
 from pgvector.psycopg import register_vector
 from psycopg.rows import DictRow, dict_row
 
-from app.embeddings import embed_texts
-
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/rag_tax"
 
 
@@ -37,54 +35,10 @@ class PostgresStore:
     # ------------------------------------------------------------------
 
     def ensure_node_embeddings(self) -> int:
-        """embedding IS NULL 인 노드를 일괄 임베딩한다. 처리 수 반환."""
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT dn.id,
-                           d.title  AS doc_title,
-                           dn.ref,
-                           dn.title AS node_title,
-                           dn.content
-                    FROM document_nodes dn
-                    JOIN document_versions dv ON dv.id = dn.version_id
-                    JOIN documents d          ON d.id  = dv.document_id
-                    WHERE dn.embedding IS NULL
-                      AND dn.content   IS NOT NULL
-                      AND dn.depth     <= 1
-                    ORDER BY dn.created_at, dn.id
-                    """
-                )
-                rows = cur.fetchall()
+        """미처리 노드를 임베딩한다. 처리된 청크 수 반환."""
+        from app.ingestion.writers import IngestWriter
 
-            if not rows:
-                return 0
-
-            texts = [
-                " ".join(
-                    filter(
-                        None,
-                        [
-                            r["doc_title"],
-                            r["ref"] or "",
-                            r["node_title"] or "",
-                            r["content"],
-                        ],
-                    )
-                )
-                for r in rows
-            ]
-            embeddings = embed_texts(texts)
-
-            with conn.cursor() as cur:
-                for row, emb in zip(rows, embeddings, strict=True):
-                    cur.execute(
-                        "UPDATE document_nodes SET embedding = %s WHERE id = %s",
-                        (Vector(emb), row["id"]),
-                    )
-            conn.commit()
-            return len(rows)
+        return IngestWriter(dsn=self.dsn).embed_pending()
 
     # ------------------------------------------------------------------
     # 내부: 현행 버전 목록
@@ -239,23 +193,43 @@ class PostgresStore:
                     )
                 nodes = cur.fetchall()
 
-                # 매칭 노드 → 조(depth=0) 루트 매핑
-                root_ids: list[str] = []
-                root_ids_set: set[str] = set()
+                # 매칭 노드 → depth=0 조(article) 루트 매핑
+                # depth > 1 노드도 있으므로 upward CTE로 depth=0 조상을 정확히 찾는다
+                matched_ids = [n["id"] for n in nodes]
                 node_to_root: dict[str, str] = {}
-                for n in nodes:
-                    root_id = (
-                        n["parent_id"] if (n["depth"] > 0 and n["parent_id"]) else n["id"]
+                if matched_ids:
+                    cur.execute(
+                        """
+                        WITH RECURSIVE up AS (
+                            SELECT id AS origin_id, id, parent_id, depth
+                            FROM document_nodes
+                            WHERE id = ANY(%s::text[])
+                            UNION ALL
+                            SELECT up.origin_id, n.id, n.parent_id, n.depth
+                            FROM document_nodes n
+                            JOIN up ON n.id = up.parent_id
+                            WHERE up.depth > 0
+                        )
+                        SELECT DISTINCT ON (origin_id) origin_id, id AS root_id
+                        FROM up
+                        WHERE depth = 0
+                        ORDER BY origin_id
+                        """,
+                        (matched_ids,),
                     )
-                    node_to_root[n["id"]] = root_id
-                    if root_id not in root_ids_set:
-                        root_ids_set.add(root_id)
-                        root_ids.append(root_id)
+                    for row in cur.fetchall():
+                        node_to_root[row["origin_id"]] = row["root_id"]
+
+                # node_to_root 에 없는 노드(이미 depth=0인 경우) 보완
+                for n in nodes:
+                    if n["id"] not in node_to_root:
+                        node_to_root[n["id"]] = n["id"]
+
+                root_ids_set: set[str] = set(node_to_root.values())
+                root_ids: list[str] = list(root_ids_set)
 
                 # 조 루트의 전체 서브트리(항/호/목 포함)를 recursive CTE로 일괄 조회
-                context_by_root: dict[str, list[dict[str, Any]]] = {
-                    rid: [] for rid in root_ids
-                }
+                context_by_root: dict[str, list[dict[str, Any]]] = {rid: [] for rid in root_ids}
                 root_node_ref: dict[str, str] = {}
                 if root_ids:
                     cur.execute(
@@ -284,9 +258,7 @@ class PostgresStore:
 
                 # 인용 관계 일괄 조회
                 node_ids = [n["id"] for n in nodes]
-                citations_by_node: dict[str, list[dict[str, Any]]] = {
-                    nid: [] for nid in node_ids
-                }
+                citations_by_node: dict[str, list[dict[str, Any]]] = {nid: [] for nid in node_ids}
                 if node_ids:
                     cur.execute(
                         """

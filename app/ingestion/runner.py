@@ -108,11 +108,12 @@ def run(api_key: str, dry_run: bool, skip_embed: bool, debug: bool = False) -> N
     print(f"임베딩 완료 — {embedded}개 섹션")
 
 
-def run_embed_only() -> None:
+def run_embed_only(limit: int | None = None) -> None:
     writer = IngestWriter()
-    print("임베딩 생성 중...")
-    embedded = writer.embed_pending()
-    print(f"완료 — {embedded}개 섹션")
+    label = f"처음 {limit}개 " if limit else ""
+    print(f"임베딩 생성 중... ({label}노드 대상)")
+    embedded = writer.embed_pending(limit=limit)
+    print(f"완료 — {embedded}개 노드")
 
 
 def main() -> None:
@@ -140,10 +141,17 @@ def main() -> None:
         action="store_true",
         help="API 요청 URL과 응답 원문 앞부분을 출력",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="임베딩 대상 노드 수 제한 (--embed-only 와 함께 사용, 테스트용)",
+    )
     args = parser.parse_args()
 
     if args.embed_only:
-        run_embed_only()
+        run_embed_only(limit=args.limit)
         return
 
     api_key = os.getenv("LAW_API_KEY")
