@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.embeddings import embed_text
+from app.llm import generate_answer
 from app.storage import PostgresStore
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -120,15 +122,20 @@ def search(request: SearchRequest) -> dict[str, Any]:
     ranked_results: list[dict[str, Any]] = []
     filters = request.filters or SearchFilters()
 
+    timings: dict[str, float] = {}
     try:
-        STORE.ensure_node_embeddings()
+        t0 = time.perf_counter()
         query_embedding = embed_text(request.query)
+        timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
+
+        t0 = time.perf_counter()
         sections = STORE.search_sections(
             as_of=request.asOfDate,
             doc_types=filters.docTypes,
             authorities=filters.authority,
             query_embedding=query_embedding,
         )
+        timings["search_ms"] = round((time.perf_counter() - t0) * 1000)
     except psycopg.Error as error:
         raise HTTPException(
             status_code=503,
@@ -136,12 +143,14 @@ def search(request: SearchRequest) -> dict[str, Any]:
         ) from error
     except Exception:
         query_embedding = None
+        t0 = time.perf_counter()
         sections = STORE.search_sections(
             as_of=request.asOfDate,
             doc_types=filters.docTypes,
             authorities=filters.authority,
             query_embedding=query_embedding,
         )
+        timings["search_ms"] = round((time.perf_counter() - t0) * 1000)
 
     for section in sections:
         kw_score = keyword_score(query_tokens, section, section["title"])
@@ -176,13 +185,30 @@ def search(request: SearchRequest) -> dict[str, Any]:
     else:
         ranked_results.sort(key=lambda item: item["score"], reverse=reverse)
 
+    t0 = time.perf_counter()
+    try:
+        summary = generate_answer(request.query, ranked_results)
+    except Exception:
+        summary = build_summary(request.query, ranked_results)
+    timings["llm_ms"] = round((time.perf_counter() - t0) * 1000)
+
+    total = sum(timings.values())
+    print(
+        f"[search] embed={timings.get('embed_ms')}ms  "
+        f"search={timings.get('search_ms')}ms  "
+        f"llm={timings.get('llm_ms')}ms  "
+        f"total={total}ms",
+        flush=True,
+    )
+
     return {
-        "summary": build_summary(request.query, ranked_results),
+        "summary": summary,
         "results": ranked_results[:10],
         "debug": {
             "queryTokens": query_tokens,
             "semanticSearch": True,
             "totalMatches": len(ranked_results),
+            "timings": timings,
         },
     }
 
