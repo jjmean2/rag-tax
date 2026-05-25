@@ -7,6 +7,7 @@ db/migrations/NNN_*.sql 파일을 번호 순으로 적용한다.
     uv run python -m app.db.migrate
     DATABASE_URL=postgresql://... uv run python -m app.db.migrate
 """
+
 from __future__ import annotations
 
 import os
@@ -40,16 +41,14 @@ def run(dsn: str | None = None) -> None:
         applied = {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
 
         for path in migration_files:
-            version = path.stem.split("_")[0]   # "001" ← "001_init_schema"
+            version = path.stem.split("_")[0]  # "001" ← "001_init_schema"
             if version in applied:
                 print(f"  skip {path.name} (already applied)")
                 continue
 
             print(f"  applying {path.name} ...")
             conn.execute(path.read_text(encoding="utf-8"))
-            conn.execute(
-                "INSERT INTO schema_migrations (version) VALUES (%s)", (version,)
-            )
+            conn.execute("INSERT INTO schema_migrations (version) VALUES (%s)", (version,))
             conn.commit()
             print(f"  ✓ {version} applied")
 

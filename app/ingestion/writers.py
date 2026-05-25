@@ -1,4 +1,5 @@
 """DB 업서트 및 임베딩 생성."""
+
 from __future__ import annotations
 
 import hashlib
@@ -41,8 +42,16 @@ class IngestWriter:
                         current_version_id = EXCLUDED.current_version_id,
                         updated_at         = NOW()
                     """,
-                    (doc_id, doc.source_system, doc.source_id, doc.doc_type,
-                     doc.authority, doc.title, doc.canonical_url, version_id),
+                    (
+                        doc_id,
+                        doc.source_system,
+                        doc.source_id,
+                        doc.doc_type,
+                        doc.authority,
+                        doc.title,
+                        doc.canonical_url,
+                        version_id,
+                    ),
                 )
 
                 cur.execute(
@@ -53,10 +62,18 @@ class IngestWriter:
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (id) DO NOTHING
                     """,
-                    (version_id, doc_id, v.version_label,
-                     v.effective_from, v.effective_to, v.publish_date,
-                     v.status, v.raw_text, content_hash,
-                     psycopg.types.json.Jsonb(v.metadata)),
+                    (
+                        version_id,
+                        doc_id,
+                        v.version_label,
+                        v.effective_from,
+                        v.effective_to,
+                        v.publish_date,
+                        v.status,
+                        v.raw_text,
+                        content_hash,
+                        psycopg.types.json.Jsonb(v.metadata),
+                    ),
                 )
 
                 # 노드를 depth 순으로 정렬해 부모가 항상 먼저 삽입되도록 보장
@@ -65,10 +82,7 @@ class IngestWriter:
                 inserted = updated = 0
                 for node in sorted_nodes:
                     node_db_id = f"{version_id}:{node.node_id}"
-                    parent_db_id = (
-                        f"{version_id}:{node.parent_id}"
-                        if node.parent_id else None
-                    )
+                    parent_db_id = f"{version_id}:{node.parent_id}" if node.parent_id else None
                     token_count = len(node.content.split()) if node.content else None
 
                     cur.execute(
@@ -86,11 +100,19 @@ class IngestWriter:
                             embedding_model = NULL
                         RETURNING (xmax = 0) AS is_insert
                         """,
-                        (node_db_id, version_id, parent_db_id,
-                         node.node_type, node.ref, node.title,
-                         node.content, node.depth, node.order_no,
-                         token_count,
-                         psycopg.types.json.Jsonb(node.metadata)),
+                        (
+                            node_db_id,
+                            version_id,
+                            parent_db_id,
+                            node.node_type,
+                            node.ref,
+                            node.title,
+                            node.content,
+                            node.depth,
+                            node.order_no,
+                            token_count,
+                            psycopg.types.json.Jsonb(node.metadata),
+                        ),
                     )
                     row = cur.fetchone()
                     if row and row["is_insert"]:
@@ -105,7 +127,7 @@ class IngestWriter:
     def embed_pending(
         self,
         batch_size: int = EMBED_BATCH_SIZE,
-        model: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS",
+        model: str = "text-embedding-3-small",
     ) -> int:
         """embedding IS NULL 인 노드를 일괄 임베딩한다. 처리 수 반환.
 
@@ -141,14 +163,19 @@ class IngestWriter:
             total = 0
 
             for i in range(0, len(rows), batch_size):
-                batch = rows[i: i + batch_size]
+                batch = rows[i : i + batch_size]
                 texts = [
-                    " ".join(filter(None, [
-                        r["doc_title"],
-                        r["ref"] or "",
-                        r["node_title"] or "",
-                        r["content"],
-                    ]))
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                r["doc_title"],
+                                r["ref"] or "",
+                                r["node_title"] or "",
+                                r["content"],
+                            ],
+                        )
+                    )
                     for r in batch
                 ]
                 embeddings = embed_texts(texts)

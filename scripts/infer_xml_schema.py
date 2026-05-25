@@ -4,6 +4,7 @@
     uv run python scripts/infer_xml_schema.py law_response.xml
     uv run python scripts/infer_xml_schema.py admrul_response.xml
 """
+
 from __future__ import annotations
 
 import sys
@@ -52,11 +53,17 @@ def summarize(path: str) -> None:
     tree = ET.parse(path)
     root = tree.getroot()
 
-    stats: dict = defaultdict(lambda: {
-        "tag": "", "parent": "", "count": 0,
-        "has_text": False, "samples": [],
-        "attrs": set(), "children": set(),
-    })
+    stats: dict = defaultdict(
+        lambda: {
+            "tag": "",
+            "parent": "",
+            "count": 0,
+            "has_text": False,
+            "samples": [],
+            "attrs": set(),
+            "children": set(),
+        }
+    )
 
     collect(root, "", stats)
 

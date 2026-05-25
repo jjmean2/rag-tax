@@ -55,9 +55,7 @@ def tokenize(value: str) -> list[str]:
     return [token for token in normalize_text(value).split(" ") if token]
 
 
-def keyword_score(
-    query_tokens: list[str], section: dict[str, Any], title: str
-) -> float:
+def keyword_score(query_tokens: list[str], section: dict[str, Any], title: str) -> float:
     title_tokens = tokenize(title)
     ref_tokens = tokenize(section.get("sectionRef") or "")
     content_tokens = tokenize(section["snippet"])
@@ -122,7 +120,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
     filters = request.filters or SearchFilters()
 
     try:
-        STORE.ensure_section_embeddings()
+        STORE.ensure_node_embeddings()
         query_embedding = embed_text(request.query)
         sections = STORE.search_sections(
             as_of=request.asOfDate,
@@ -135,7 +133,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
             status_code=503,
             detail=f"Database unavailable. Ensure schema is initialized and DATABASE_URL is reachable. {error}",
         ) from error
-    except Exception as error:
+    except Exception:
         query_embedding = None
         sections = STORE.search_sections(
             as_of=request.asOfDate,
@@ -157,13 +155,9 @@ def search(request: SearchRequest) -> dict[str, Any]:
                 "documentVersionId": section["documentVersionId"],
                 "title": section["title"],
                 "docType": section["docType"],
-                "docTypeLabel": DOC_TYPE_LABELS.get(
-                    section["docType"], section["docType"]
-                ),
+                "docTypeLabel": DOC_TYPE_LABELS.get(section["docType"], section["docType"]),
                 "authority": section["authority"],
-                "authorityLabel": AUTHORITY_LABELS.get(
-                    section["authority"], section["authority"]
-                ),
+                "authorityLabel": AUTHORITY_LABELS.get(section["authority"], section["authority"]),
                 "date": section["date"],
                 "score": round(combined_score, 4),
                 "sectionRef": section.get("sectionRef"),
@@ -175,9 +169,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
 
     reverse = request.sort != "oldest"
     if request.sort == "latest":
-        ranked_results.sort(
-            key=lambda item: (item["date"], item["score"]), reverse=True
-        )
+        ranked_results.sort(key=lambda item: (item["date"], item["score"]), reverse=True)
     else:
         ranked_results.sort(key=lambda item: item["score"], reverse=reverse)
 
@@ -203,9 +195,7 @@ def get_document(document_id: str, asOfDate: date | None = None) -> dict[str, An
         ) from error
 
     if payload is None:
-        raise HTTPException(
-            status_code=404, detail="Document or document version not found"
-        )
+        raise HTTPException(status_code=404, detail="Document or document version not found")
     return payload
 
 

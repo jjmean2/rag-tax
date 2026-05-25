@@ -1,15 +1,17 @@
 """PostgreSQL 검색·조회 스토어."""
+
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import date
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 from pgvector import Vector
 from pgvector.psycopg import register_vector
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 
 from app.embeddings import embed_texts
 
@@ -21,11 +23,14 @@ class PostgresStore:
         self.dsn = dsn or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 
     @contextmanager
-    def connect(self, register_pgvector: bool = True):
-        with psycopg.connect(self.dsn, row_factory=dict_row) as connection:
+    def connect(
+        self, register_pgvector: bool = True
+    ) -> Generator[psycopg.Connection[DictRow], None, None]:
+        with psycopg.connect(self.dsn, row_factory=dict_row) as connection:  # type: ignore[call-overload]
+            conn = cast(psycopg.Connection[DictRow], connection)
             if register_pgvector:
-                register_vector(connection)
-            yield connection
+                register_vector(conn)
+            yield conn
 
     # ------------------------------------------------------------------
     # 임베딩 생성
@@ -57,12 +62,17 @@ class PostgresStore:
                 return 0
 
             texts = [
-                " ".join(filter(None, [
-                    r["doc_title"],
-                    r["ref"] or "",
-                    r["node_title"] or "",
-                    r["content"],
-                ]))
+                " ".join(
+                    filter(
+                        None,
+                        [
+                            r["doc_title"],
+                            r["ref"] or "",
+                            r["node_title"] or "",
+                            r["content"],
+                        ],
+                    )
+                )
                 for r in rows
             ]
             embeddings = embed_texts(texts)
@@ -201,16 +211,18 @@ class PostgresStore:
                         ORDER BY n.embedding <=> %s
                         LIMIT %s
                         """,
-                        (Vector(query_embedding), version_ids,
-                         Vector(query_embedding), top_k),
+                        (
+                            Vector(query_embedding),
+                            version_ids,
+                            Vector(query_embedding),
+                            top_k,
+                        ),
                     )
                 nodes = cur.fetchall()
 
                 # 인용 관계 일괄 조회
                 node_ids = [n["id"] for n in nodes]
-                citations_by_node: dict[str, list[dict[str, Any]]] = {
-                    nid: [] for nid in node_ids
-                }
+                citations_by_node: dict[str, list[dict[str, Any]]] = {nid: [] for nid in node_ids}
                 if node_ids:
                     cur.execute(
                         """
@@ -233,34 +245,34 @@ class PostgresStore:
             else:
                 section_ref = n["ref"] or ""
 
-            results.append({
-                "id": n["id"],
-                "documentId": v["document_id"],
-                "documentVersionId": n["version_id"],
-                "title": v["title"],
-                "docType": v["doc_type"],
-                "authority": v["authority"],
-                "canonicalUrl": v["canonical_url"],
-                "date": v["publish_date"],
-                "nodeType": n["node_type"],
-                "depth": n["depth"],
-                "sectionRef": section_ref,
-                "heading": n["node_title"],
-                "parentRef": n["parent_ref"],
-                "parentTitle": n["parent_title"],
-                "snippet": n["content"],
-                "semanticScore": float(n.get("semantic_score") or 0.0),
-                "citations": citations_by_node.get(n["id"], []),
-            })
+            results.append(
+                {
+                    "id": n["id"],
+                    "documentId": v["document_id"],
+                    "documentVersionId": n["version_id"],
+                    "title": v["title"],
+                    "docType": v["doc_type"],
+                    "authority": v["authority"],
+                    "canonicalUrl": v["canonical_url"],
+                    "date": v["publish_date"],
+                    "nodeType": n["node_type"],
+                    "depth": n["depth"],
+                    "sectionRef": section_ref,
+                    "heading": n["node_title"],
+                    "parentRef": n["parent_ref"],
+                    "parentTitle": n["parent_title"],
+                    "snippet": n["content"],
+                    "semanticScore": float(n.get("semantic_score") or 0.0),
+                    "citations": citations_by_node.get(n["id"], []),
+                }
+            )
         return results
 
     # ------------------------------------------------------------------
     # 문서 전체 조회
     # ------------------------------------------------------------------
 
-    def get_document(
-        self, document_id: str, as_of: date | None
-    ) -> dict[str, Any] | None:
+    def get_document(self, document_id: str, as_of: date | None) -> dict[str, Any] | None:
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(

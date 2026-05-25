@@ -9,6 +9,7 @@
     LAW_API_KEY   법제처 Open API OC 키 (필수)
     DATABASE_URL  PostgreSQL 연결 문자열 (기본: localhost)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -63,15 +64,16 @@ def run(api_key: str, dry_run: bool, skip_embed: bool, debug: bool = False) -> N
             print("  ✗ XML 파싱 실패, 건너뜀")
             continue
 
-        section_count = len(doc.version.sections)
-        print(f"  → 『{doc.title}』 조문 {section_count}개 파싱 완료")
+        node_count = len(doc.version.nodes)
+        print(f"  → 『{doc.title}』 노드 {node_count}개 파싱 완료")
 
         if dry_run:
             print("  → dry-run: DB 반영 생략")
-            if doc.version.sections:
-                sample = doc.version.sections[0]
-                preview = textwrap.shorten(sample.content, width=80)
-                print(f"     첫 섹션: {sample.section_ref} {sample.heading} — {preview}")
+            articles = [n for n in doc.version.nodes if n.depth == 0]
+            if articles:
+                sample = articles[0]
+                preview = textwrap.shorten(sample.content or "", width=80)
+                print(f"     첫 조문: {sample.ref} {sample.title or ''} — {preview}")
             continue
 
         try:
@@ -119,19 +121,23 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="API 파싱만 수행하고 DB에 반영하지 않음",
     )
     parser.add_argument(
-        "--skip-embed", action="store_true",
+        "--skip-embed",
+        action="store_true",
         help="DB 저장 후 임베딩 생성을 건너뜀",
     )
     parser.add_argument(
-        "--embed-only", action="store_true",
+        "--embed-only",
+        action="store_true",
         help="수집 없이 미완료 임베딩만 생성",
     )
     parser.add_argument(
-        "--debug", action="store_true",
+        "--debug",
+        action="store_true",
         help="API 요청 URL과 응답 원문 앞부분을 출력",
     )
     args = parser.parse_args()

@@ -3,15 +3,16 @@
 schemas/law_go_kr_law.rnc 와 1:1 대응.
 각 클래스는 from_el() 로 XML Element 에서 생성한다.
 """
+
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-
 # ─────────────────────────────────────────────────────────
 # 목 / 호 / 항  (leaf → root 순서로 정의)
 # ─────────────────────────────────────────────────────────
+
 
 @dataclass
 class 목:
@@ -29,7 +30,7 @@ class 목:
 @dataclass
 class 호:
     번호: str
-    가지번호: str | None = None     # 있으면 제X호의Y
+    가지번호: str | None = None  # 있으면 제X호의Y
     내용: str | None = None
     목목록: list[목] = field(default_factory=list)
 
@@ -66,16 +67,17 @@ class 항:
 # 조문단위
 # ─────────────────────────────────────────────────────────
 
+
 @dataclass
 class 조문단위:
-    번호: str                            # 조문번호
-    여부: str                            # 조문여부: "전문" | "삭제"
-    가지번호: str | None = None          # 조문가지번호 → 제X조의Y
+    번호: str  # 조문번호
+    여부: str  # 조문여부: "전문" | "삭제"
+    가지번호: str | None = None  # 조문가지번호 → 제X조의Y
     제목: str | None = None
     내용: str | None = None
     시행일자: str | None = None
     참고자료: str | None = None
-    키: str | None = None                # @조문키
+    키: str | None = None  # @조문키
     항목록: list[항] = field(default_factory=list)
 
     @classmethod
@@ -107,6 +109,7 @@ class 조문단위:
 # 기본정보
 # ─────────────────────────────────────────────────────────
 
+
 @dataclass
 class 기본정보:
     법령ID: str
@@ -117,8 +120,8 @@ class 기본정보:
     법종구분: str | None = None
     법종구분코드: str | None = None
     공포번호: str | None = None
-    공포일자: str | None = None          # YYYYMMDD
-    시행일자: str | None = None          # YYYYMMDD
+    공포일자: str | None = None  # YYYYMMDD
+    시행일자: str | None = None  # YYYYMMDD
     제개정구분: str | None = None
 
     @classmethod
@@ -144,12 +147,13 @@ class 기본정보:
 # 부칙단위
 # ─────────────────────────────────────────────────────────
 
+
 @dataclass
 class 부칙단위:
     공포번호: str | None = None
-    공포일자: str | None = None          # YYYYMMDD
+    공포일자: str | None = None  # YYYYMMDD
     내용: str | None = None
-    키: str | None = None                # @부칙키
+    키: str | None = None  # @부칙키
 
     @classmethod
     def from_el(cls, el: ET.Element) -> 부칙단위:
@@ -164,6 +168,7 @@ class 부칙단위:
 # ─────────────────────────────────────────────────────────
 # 법령  (루트)
 # ─────────────────────────────────────────────────────────
+
 
 @dataclass
 class 법령:
@@ -197,7 +202,9 @@ class 법령:
                 for u in (부칙_el.findall("부칙단위") if 부칙_el is not None else [])
             ],
             개정문내용=(개정문_el.findtext("개정문내용") or "").strip() or None
-            if 개정문_el is not None else None,
+            if 개정문_el is not None
+            else None,
             제개정이유내용=(이유_el.findtext("제개정이유내용") or "").strip() or None
-            if 이유_el is not None else None,
+            if 이유_el is not None
+            else None,
         )

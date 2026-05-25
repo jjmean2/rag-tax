@@ -3,6 +3,7 @@
 API 문서: https://open.law.go.kr/LSO/openApi/openApiInfo.do
 rate limit: 요청 간 REQUEST_DELAY 초 대기
 """
+
 from __future__ import annotations
 
 import time
@@ -42,19 +43,19 @@ class LawGoKrConnector:
 
         API의 검색은 포함(contains) 방식이므로 타이틀을 직접 비교한다.
         """
-        root = self._get("lawSearch.do", {
-            "target": target,
-            "query": query,
-            "display": "20",
-            "page": "1",
-        })
+        root = self._get(
+            "lawSearch.do",
+            {
+                "target": target,
+                "query": query,
+                "display": "20",
+                "page": "1",
+            },
+        )
         for law_el in root.findall("law"):
             name = (law_el.findtext("법령명한글") or "").strip()
             if name == query:
-                mst = (
-                    law_el.findtext("법령일련번호")
-                    or law_el.findtext("행정규칙일련번호")
-                )
+                mst = law_el.findtext("법령일련번호") or law_el.findtext("행정규칙일련번호")
                 if mst:
                     return mst.strip()
         return None
@@ -121,7 +122,8 @@ class LawGoKrConnector:
             title=info.법령명_한글,
             canonical_url=(
                 f"https://www.law.go.kr/법령/{urllib.parse.quote(info.법령명_한글)}"
-                if info.법령명_한글 else None
+                if info.법령명_한글
+                else None
             ),
             version=RawVersion(
                 version_label=info.공포번호 or "",
@@ -140,23 +142,16 @@ class LawGoKrConnector:
         if info is None:
             return None
 
-        title = (
-            info.findtext("행정규칙명")
-            or info.findtext("법령명_한글")
-            or ""
-        ).strip()
+        title = (info.findtext("행정규칙명") or info.findtext("법령명_한글") or "").strip()
         authority_el = info.find("소관부처")
         authority_name = (
-            (authority_el.text or "").strip() if authority_el is not None
+            (authority_el.text or "").strip()
+            if authority_el is not None
             else (info.findtext("소관부처명") or "").strip()
         )
-        publish_date = self._parse_date(
-            info.findtext("발령일자") or info.findtext("공포일자")
-        )
+        publish_date = self._parse_date(info.findtext("발령일자") or info.findtext("공포일자"))
         effective_from = self._parse_date(info.findtext("시행일자"))
-        version_label = (
-            info.findtext("발령번호") or info.findtext("공포번호") or ""
-        ).strip()
+        version_label = (info.findtext("발령번호") or info.findtext("공포번호") or "").strip()
 
         nodes, raw_text = self._nodes_from_admrul(root)
 
@@ -194,60 +189,68 @@ class LawGoKrConnector:
             if unit.is_deleted or not unit.번호:
                 continue
 
-            article_ref = unit.section_ref      # "제19조" | "제19조의2"
+            article_ref = unit.section_ref  # "제19조" | "제19조의2"
 
-            nodes.append(RawNode(
-                node_id=article_ref,
-                node_type="article",
-                ref=article_ref,
-                title=unit.제목,
-                content=unit.내용,              # 조문내용 (없으면 None)
-                depth=0,
-                order_no=article_order,
-                parent_id=None,
-                metadata={"조문번호": unit.번호, "조문가지번호": unit.가지번호 or ""},
-            ))
+            nodes.append(
+                RawNode(
+                    node_id=article_ref,
+                    node_type="article",
+                    ref=article_ref,
+                    title=unit.제목,
+                    content=unit.내용,  # 조문내용 (없으면 None)
+                    depth=0,
+                    order_no=article_order,
+                    parent_id=None,
+                    metadata={"조문번호": unit.번호, "조문가지번호": unit.가지번호 or ""},
+                )
+            )
 
             para_order = 0
             for 항 in unit.항목록:
                 para_id = f"{article_ref}:{항.번호}"
-                nodes.append(RawNode(
-                    node_id=para_id,
-                    node_type="paragraph",
-                    ref=항.번호,
-                    title=None,
-                    content=항.내용,
-                    depth=1,
-                    order_no=para_order,
-                    parent_id=article_ref,
-                ))
+                nodes.append(
+                    RawNode(
+                        node_id=para_id,
+                        node_type="paragraph",
+                        ref=항.번호,
+                        title=None,
+                        content=항.내용,
+                        depth=1,
+                        order_no=para_order,
+                        parent_id=article_ref,
+                    )
+                )
 
                 item_order = 0
                 for 호 in 항.호목록:
                     item_id = f"{para_id}:{호.번호}"
-                    nodes.append(RawNode(
-                        node_id=item_id,
-                        node_type="item",
-                        ref=호.번호,
-                        title=None,
-                        content=호.내용,
-                        depth=2,
-                        order_no=item_order,
-                        parent_id=para_id,
-                    ))
+                    nodes.append(
+                        RawNode(
+                            node_id=item_id,
+                            node_type="item",
+                            ref=호.번호,
+                            title=None,
+                            content=호.내용,
+                            depth=2,
+                            order_no=item_order,
+                            parent_id=para_id,
+                        )
+                    )
 
                     subitem_order = 0
                     for 목 in 호.목목록:
-                        nodes.append(RawNode(
-                            node_id=f"{item_id}:{목.번호}",
-                            node_type="subitem",
-                            ref=목.번호,
-                            title=None,
-                            content=목.내용,
-                            depth=3,
-                            order_no=subitem_order,
-                            parent_id=item_id,
-                        ))
+                        nodes.append(
+                            RawNode(
+                                node_id=f"{item_id}:{목.번호}",
+                                node_type="subitem",
+                                ref=목.번호,
+                                title=None,
+                                content=목.내용,
+                                depth=3,
+                                order_no=subitem_order,
+                                parent_id=item_id,
+                            )
+                        )
                         subitem_order += 1
                     item_order += 1
                 para_order += 1
@@ -324,17 +327,19 @@ class LawGoKrConnector:
             if not content:
                 continue
 
-            nodes.append(RawNode(
-                node_id=ref,
-                node_type="article",
-                ref=ref,
-                title=조문제목 or None,
-                content=content,
-                depth=0,
-                order_no=order,
-                parent_id=None,
-                metadata={"조문번호": 조문번호, "조문가지번호": 조문가지번호},
-            ))
+            nodes.append(
+                RawNode(
+                    node_id=ref,
+                    node_type="article",
+                    ref=ref,
+                    title=조문제목 or None,
+                    content=content,
+                    depth=0,
+                    order_no=order,
+                    parent_id=None,
+                    metadata={"조문번호": 조문번호, "조문가지번호": 조문가지번호},
+                )
+            )
             header = f"{ref}({조문제목})" if 조문제목 else ref
             raw_lines.append(f"{header}\n{content}")
             order += 1
