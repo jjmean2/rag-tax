@@ -50,6 +50,9 @@ ingest-embed:   ## 미완료 임베딩만 생성 (OPENAI_API_KEY 필수)
 ingest-chunk-dry: ## 청킹 계획 출력 (API 호출 없음, DB 필요)
 	uv run python -m app.ingestion.runner --embed-only --chunk-dry
 
+ingest-verify:    ## 임베딩 커버리지 검증 (고아 노드 및 parent-chunk 정합성 확인)
+	uv run python -m app.ingestion.runner --verify-embed
+
 lint:           ## 코드 스타일 검사 + 포맷 검사 (ruff)
 	uv run ruff check app
 	uv run ruff format --check app

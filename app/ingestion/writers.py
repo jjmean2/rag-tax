@@ -361,3 +361,69 @@ class IngestWriter:
 
         print()
         return total
+
+    def verify_embed_coverage(self) -> dict:
+        """임베딩 커버리지를 검증한다.
+
+        확인 항목:
+        1. 고아 노드: content가 있으나 embedding도 embedding_model도 없는 노드
+        2. 잘못된 parent-chunk: 'parent-chunk'로 마킹됐지만 embedding을 가진 조상이 없는 노드
+        """
+        with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:  # type: ignore[call-overload]
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*)                                                             AS total,
+                        COUNT(*) FILTER (WHERE embedding IS NOT NULL)                       AS chunk_roots,
+                        COUNT(*) FILTER (WHERE embedding_model = 'parent-chunk')            AS covered,
+                        COUNT(*) FILTER (WHERE embedding IS NULL AND embedding_model IS NULL)
+                                                                                            AS unprocessed,
+                        COUNT(*) FILTER (WHERE embedding IS NULL AND embedding_model IS NULL
+                                           AND content IS NOT NULL AND content != '')       AS orphaned
+                    FROM document_nodes
+                    """
+                )
+                stats: dict = dict(cur.fetchone())  # type: ignore[arg-type]
+
+                cur.execute(
+                    """
+                    SELECT id, version_id, depth, ref, LEFT(content, 60) AS content_preview
+                    FROM document_nodes
+                    WHERE embedding IS NULL
+                      AND embedding_model IS NULL
+                      AND content IS NOT NULL
+                      AND content != ''
+                    LIMIT 10
+                    """
+                )
+                orphaned_rows: list[dict] = cur.fetchall()  # type: ignore[assignment]
+
+                # 모든 노드를 메모리로 읽어 parent-chunk 검증
+                cur.execute(
+                    "SELECT id, parent_id, embedding, embedding_model FROM document_nodes"
+                )
+                all_nodes: dict[str, dict] = {r["id"]: r for r in cur.fetchall()}  # type: ignore[assignment]
+
+        # parent-chunk 노드 중 embedded 조상이 없는 것 탐색
+        invalid_parent_chunks: list[str] = []
+        for node_id, node in all_nodes.items():
+            if node["embedding_model"] != "parent-chunk":
+                continue
+            current = node
+            found = False
+            while current["parent_id"] and current["parent_id"] in all_nodes:
+                current = all_nodes[current["parent_id"]]
+                if current["embedding"] is not None:
+                    found = True
+                    break
+            if not found:
+                invalid_parent_chunks.append(node_id)
+
+        valid = stats["orphaned"] == 0 and len(invalid_parent_chunks) == 0
+        return {
+            "valid": valid,
+            "stats": stats,
+            "orphaned_nodes": orphaned_rows,
+            "invalid_parent_chunks": invalid_parent_chunks[:10],
+        }

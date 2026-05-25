@@ -108,6 +108,32 @@ def run(api_key: str, dry_run: bool, skip_embed: bool, debug: bool = False) -> N
     print(f"임베딩 완료 — {embedded}개 섹션")
 
 
+def run_verify_embed() -> None:
+    writer = IngestWriter()
+    print("임베딩 커버리지 검증 중...")
+    result = writer.verify_embed_coverage()
+    s = result["stats"]
+    print(
+        f"\n  전체 노드      : {s['total']}"
+        f"\n  청크 루트      : {s['chunk_roots']}  (embedding 있음)"
+        f"\n  커버된 노드    : {s['covered']}  (parent-chunk)"
+        f"\n  미처리 노드    : {s['unprocessed']}  (embedding/model 모두 NULL)"
+        f"\n  고아 노드      : {s['orphaned']}  (content 있으나 미처리)"
+    )
+    if result["orphaned_nodes"]:
+        print("\n[!] 고아 노드 (처음 10개):")
+        for n in result["orphaned_nodes"]:
+            print(f"    {n['id']}  depth={n['depth']}  ref={n['ref']}  '{n['content_preview']}'")
+    if result["invalid_parent_chunks"]:
+        print("\n[!] 잘못된 parent-chunk (처음 10개):")
+        for nid in result["invalid_parent_chunks"]:
+            print(f"    {nid}")
+    if result["valid"]:
+        print("\n✓ 검증 통과: 고아 노드 없음, parent-chunk 마킹 정상")
+    else:
+        print("\n✗ 검증 실패: 위 항목 확인 필요")
+
+
 def run_embed_only(limit: int | None = None, dry_run: bool = False) -> None:
     writer = IngestWriter()
     if dry_run:
@@ -157,7 +183,16 @@ def main() -> None:
         action="store_true",
         help="청킹 계획만 출력하고 임베딩 API 호출 없이 종료 (--embed-only 와 함께 사용)",
     )
+    parser.add_argument(
+        "--verify-embed",
+        action="store_true",
+        help="임베딩 커버리지 검증 (고아 노드 및 잘못된 parent-chunk 탐색)",
+    )
     args = parser.parse_args()
+
+    if args.verify_embed:
+        run_verify_embed()
+        return
 
     if args.embed_only:
         run_embed_only(limit=args.limit, dry_run=args.chunk_dry)
