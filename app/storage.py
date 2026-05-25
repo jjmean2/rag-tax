@@ -15,6 +15,8 @@ from psycopg.rows import DictRow, dict_row
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/rag_tax"
 
+_RRF_K = 60  # Reciprocal Rank Fusion 상수 (일반적으로 60)
+
 
 class PostgresStore:
     def __init__(self, dsn: str | None = None) -> None:
@@ -105,6 +107,22 @@ class PostgresStore:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _rrf_merge(sem_ids: list[str], kw_ids: list[str], top_k: int) -> list[str]:
+        """Reciprocal Rank Fusion으로 두 랭킹을 병합한다."""
+        max_rank = max(len(sem_ids), len(kw_ids), 1) + _RRF_K + 1
+        sem_rank = {nid: i + 1 for i, nid in enumerate(sem_ids)}
+        kw_rank = {nid: i + 1 for i, nid in enumerate(kw_ids)}
+        all_ids = set(sem_ids) | set(kw_ids)
+        return sorted(
+            all_ids,
+            key=lambda nid: (
+                1.0 / (_RRF_K + sem_rank.get(nid, max_rank))
+                + 1.0 / (_RRF_K + kw_rank.get(nid, max_rank))
+            ),
+            reverse=True,
+        )[:top_k]
+
+    @staticmethod
     def _build_article_context(nodes: list[dict[str, Any]]) -> str:
         """노드 목록을 LLM 컨텍스트용 텍스트로 조립한다."""
         indent = ["", "  ", "    ", "      "]
@@ -129,6 +147,7 @@ class PostgresStore:
         doc_types: list[str] | None,
         authorities: list[str] | None,
         query_embedding: list[float] | None,
+        query_text: str | None = None,
         top_k: int = 20,
     ) -> list[dict[str, Any]]:
         chosen = self._chosen_versions(as_of, doc_types, authorities)
@@ -137,67 +156,88 @@ class PostgresStore:
 
         version_ids = [r["version_id"] for r in chosen]
         version_map = {r["version_id"]: r for r in chosen}
+        candidate_k = top_k * 2
 
         with self.connect() as conn:
             with conn.cursor() as cur:
-                if query_embedding is None:
+                # 1. 벡터 검색
+                sem_ids: list[str] = []
+                sem_scores: dict[str, float] = {}
+                if query_embedding is not None:
                     cur.execute(
                         """
-                        SELECT n.id,
-                               n.version_id,
-                               n.node_type,
-                               n.ref,
-                               n.title     AS node_title,
-                               n.content,
-                               n.depth,
-                               n.parent_id,
-                               c.embed_text,
-                               0.0::double precision AS semantic_score,
-                               p.ref       AS parent_ref,
-                               p.title     AS parent_title
+                        SELECT c.node_id,
+                               1 - (c.embedding <=> %s) AS sem_score
                         FROM document_chunks c
-                        JOIN document_nodes n  ON n.id = c.node_id
-                        LEFT JOIN document_nodes p ON p.id = n.parent_id
-                        WHERE c.version_id = ANY(%s::text[])
-                          AND c.embedding IS NOT NULL
-                        ORDER BY n.version_id, n.order_no
-                        LIMIT %s
-                        """,
-                        (version_ids, top_k),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT n.id,
-                               n.version_id,
-                               n.node_type,
-                               n.ref,
-                               n.title     AS node_title,
-                               n.content,
-                               n.depth,
-                               n.parent_id,
-                               c.embed_text,
-                               1 - (c.embedding <=> %s) AS semantic_score,
-                               p.ref       AS parent_ref,
-                               p.title     AS parent_title
-                        FROM document_chunks c
-                        JOIN document_nodes n  ON n.id = c.node_id
-                        LEFT JOIN document_nodes p ON p.id = n.parent_id
                         WHERE c.version_id = ANY(%s::text[])
                         ORDER BY c.embedding <=> %s
                         LIMIT %s
                         """,
-                        (
-                            Vector(query_embedding),
-                            version_ids,
-                            Vector(query_embedding),
-                            top_k,
-                        ),
+                        (Vector(query_embedding), version_ids, Vector(query_embedding), candidate_k),
                     )
-                nodes = cur.fetchall()
+                    for row in cur.fetchall():
+                        sem_ids.append(row["node_id"])
+                        sem_scores[row["node_id"]] = float(row["sem_score"])
+
+                # 2. 키워드 검색 (PostgreSQL 풀텍스트, simple 설정)
+                kw_ids: list[str] = []
+                kw_id_set: set[str] = set()
+                if query_text:
+                    cur.execute(
+                        """
+                        SELECT c.node_id
+                        FROM document_chunks c
+                        WHERE c.version_id = ANY(%s::text[])
+                          AND c.embed_text_tsv @@ websearch_to_tsquery('simple', %s)
+                        ORDER BY ts_rank(c.embed_text_tsv,
+                                         websearch_to_tsquery('simple', %s)) DESC
+                        LIMIT %s
+                        """,
+                        (version_ids, query_text, query_text, candidate_k),
+                    )
+                    kw_ids = [r["node_id"] for r in cur.fetchall()]
+                    kw_id_set = set(kw_ids)
+
+                # 3. RRF 병합
+                if sem_ids and kw_ids:
+                    ranked_ids = self._rrf_merge(sem_ids, kw_ids, top_k)
+                elif sem_ids:
+                    ranked_ids = sem_ids[:top_k]
+                elif kw_ids:
+                    ranked_ids = kw_ids[:top_k]
+                else:
+                    return []
+
+                print(
+                    f"[storage] sem={len(sem_ids)} kw={len(kw_ids)} merged={len(ranked_ids)}",
+                    flush=True,
+                )
+
+                # 4. 병합된 ID로 노드 데이터 조회
+                cur.execute(
+                    """
+                    SELECT n.id,
+                           n.version_id,
+                           n.node_type,
+                           n.ref,
+                           n.title     AS node_title,
+                           n.content,
+                           n.depth,
+                           n.parent_id,
+                           c.embed_text,
+                           p.ref       AS parent_ref,
+                           p.title     AS parent_title
+                    FROM document_chunks c
+                    JOIN document_nodes n  ON n.id = c.node_id
+                    LEFT JOIN document_nodes p ON p.id = n.parent_id
+                    WHERE c.node_id = ANY(%s::text[])
+                    """,
+                    (ranked_ids,),
+                )
+                nodes_map = {r["id"]: r for r in cur.fetchall()}
+                nodes = [nodes_map[nid] for nid in ranked_ids if nid in nodes_map]
 
                 # 매칭 노드 → depth=0 조(article) 루트 매핑
-                # depth > 1 노드도 있으므로 upward CTE로 depth=0 조상을 정확히 찾는다
                 matched_ids = [n["id"] for n in nodes]
                 node_to_root: dict[str, str] = {}
                 if matched_ids:
@@ -223,7 +263,6 @@ class PostgresStore:
                     for row in cur.fetchall():
                         node_to_root[row["origin_id"]] = row["root_id"]
 
-                # node_to_root 에 없는 노드(이미 depth=0인 경우) 보완
                 for n in nodes:
                     if n["id"] not in node_to_root:
                         node_to_root[n["id"]] = n["id"]
@@ -303,7 +342,8 @@ class PostgresStore:
                     "snippet": n["content"],
                     "embedText": n.get("embed_text"),
                     "context": context_text,
-                    "semanticScore": float(n.get("semantic_score") or 0.0),
+                    "semanticScore": sem_scores.get(n["id"], 0.0),
+                    "keywordHit": n["id"] in kw_id_set,
                     "citations": citations_by_node.get(n["id"], []),
                 }
             )

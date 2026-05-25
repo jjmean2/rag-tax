@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 import time
 from datetime import date
@@ -149,6 +148,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
             doc_types=filters.docTypes,
             authorities=filters.authority,
             query_embedding=query_embedding,
+            query_text=request.query,
         )
         timings["search_ms"] = round((time.perf_counter() - t0) * 1000)
     except psycopg.Error as error:
@@ -157,12 +157,9 @@ def search(request: SearchRequest) -> dict[str, Any]:
             detail=f"Database unavailable. Ensure schema is initialized and DATABASE_URL is reachable. {error}",
         ) from error
 
-    for section in sections:
-        kw_score = keyword_score(query_tokens, section, section["title"])
-        sem_score = section.get("semanticScore", 0.0)
-        combined_score = kw_score * 0.75 + sem_score * 4.0
-        if math.isclose(combined_score, 0.0):
-            continue
+    for rank, section in enumerate(sections, 1):
+        # RRF 순위 기반 스코어 (DB에서 이미 정렬됨, 클라이언트 재정렬용)
+        rrf_score = 1.0 / (60 + rank)
         ranked_results.append(
             {
                 "id": section["id"],
@@ -174,7 +171,9 @@ def search(request: SearchRequest) -> dict[str, Any]:
                 "authority": section["authority"],
                 "authorityLabel": AUTHORITY_LABELS.get(section["authority"], section["authority"]),
                 "date": section["date"],
-                "score": round(combined_score, 4),
+                "score": round(rrf_score, 6),
+                "semanticScore": round(section.get("semanticScore", 0.0), 4),
+                "keywordHit": section.get("keywordHit", False),
                 "articleRef": section.get("articleRef"),
                 "sectionRef": section.get("sectionRef"),
                 "heading": section.get("heading"),
