@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from collections import defaultdict
 
 import psycopg
@@ -30,10 +31,15 @@ def _token_estimate(text: str) -> int:
 
 
 def _format_node_line(node: dict) -> str:
-    """노드 한 줄 텍스트: 'ref (title) content' 형태."""
+    """노드 한 줄 텍스트: 'ref (title) content' 형태.
+
+    content가 이미 ref로 시작하면(법제처 XML의 일반적 패턴) ref/title 프리픽스를 생략한다.
+    """
     ref = node.get("ref") or ""
-    title = f" ({node['title']})" if node.get("title") else ""
     content = node.get("content") or ""
+    if content and ref and content.lstrip().startswith(ref):
+        return content
+    title = f"({node['title']})" if node.get("title") else ""
     return f"{ref}{title} {content}".strip()
 
 
@@ -53,6 +59,27 @@ def _build_subtree_text(
         if child_text:
             parts.append(child_text)
     return "\n".join(parts)
+
+
+def _print_chunk_plan(
+    chunk_assignments: list[tuple[str, str]],
+    covered_ids: list[str],
+) -> None:
+    """청킹 계획을 stdout에 출력한다 (dry-run용)."""
+
+    try:
+        print(f"\n청킹 계획 — 청크 {len(chunk_assignments)}개 / 커버된 노드 {len(covered_ids)}개\n")
+        for i, (node_id, text) in enumerate(chunk_assignments, 1):
+            tokens = _token_estimate(text)
+            preview = text
+            short_id = node_id.split(":")[-1] if ":" in node_id else node_id
+            print(f"  [{i:3}] {short_id}  ({tokens} 토큰)")
+            print(f"        {preview}\n")
+            print("-" * 20)
+        print()
+    except BrokenPipeError:
+        sys.stderr.close()  # Python 종료 시 "Exception ignored" 메시지 억제
+        sys.exit(0)
 
 
 def _assign_chunks(
@@ -211,12 +238,14 @@ class IngestWriter:
         batch_size: int = EMBED_BATCH_SIZE,
         model: str = "text-embedding-3-small",
         limit: int | None = None,
+        dry_run: bool = False,
     ) -> int:
         """미처리 노드를 depth-agnostic 바텀업 청킹으로 임베딩한다. 처리된 청크 수 반환.
 
         토큰 한계(token_limit) 이내에서 가능한 한 큰 단위를 청크로 확정하고,
         초과하면 자식 노드로 재귀한다. 청크에 포함된 자식 노드는 'parent-chunk'로
         표시해 중복 임베딩을 방지한다.
+        dry_run=True 이면 청킹 계획만 출력하고 API 호출 및 DB 변경을 하지 않는다.
         limit 을 지정하면 청크 수를 제한한다 (테스트용).
         """
         from app.embeddings import embed_texts
@@ -274,6 +303,10 @@ class IngestWriter:
         chunk_root_ids = {nid for nid, _ in chunk_assignments}
         covered_ids = list({r["id"] for r in rows} - chunk_root_ids)
 
+        if dry_run:
+            _print_chunk_plan(chunk_assignments, covered_ids)
+            return len(chunk_assignments)
+
         # 임베딩 생성 및 저장
         with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:  # type: ignore[call-overload]
             register_vector(conn)
@@ -292,7 +325,12 @@ class IngestWriter:
                         )
                 conn.commit()
                 total += len(batch)
-                print(f"  임베딩: {total}/{len(chunk_assignments)}", end="\r", flush=True)
+                print(
+                    f"  임베딩: {total}/{len(chunk_assignments)}",
+                    end="\r",
+                    flush=True,
+                    file=sys.stderr,
+                )
 
             # 청크에 포함된 자식 노드를 'parent-chunk'로 표시해 재처리 방지
             if covered_ids:

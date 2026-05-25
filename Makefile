@@ -47,6 +47,9 @@ ingest-debug:   ## API 요청/응답 원문 출력 (dry-run 포함, LAW_API_KEY 
 ingest-embed:   ## 미완료 임베딩만 생성 (OPENAI_API_KEY 필수)
 	uv run python -m app.ingestion.runner --embed-only
 
+ingest-chunk-dry: ## 청킹 계획 출력 (API 호출 없음, DB 필요)
+	uv run python -m app.ingestion.runner --embed-only --chunk-dry
+
 lint:           ## 코드 스타일 검사 + 포맷 검사 (ruff)
 	uv run ruff check app
 	uv run ruff format --check app

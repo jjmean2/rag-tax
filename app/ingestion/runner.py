@@ -108,8 +108,12 @@ def run(api_key: str, dry_run: bool, skip_embed: bool, debug: bool = False) -> N
     print(f"임베딩 완료 — {embedded}개 섹션")
 
 
-def run_embed_only(limit: int | None = None) -> None:
+def run_embed_only(limit: int | None = None, dry_run: bool = False) -> None:
     writer = IngestWriter()
+    if dry_run:
+        print("청킹 계획 분석 중 (API 호출 없음)...")
+        writer.embed_pending(limit=limit, dry_run=True)
+        return
     label = f"처음 {limit}개 " if limit else ""
     print(f"임베딩 생성 중... ({label}노드 대상)")
     embedded = writer.embed_pending(limit=limit)
@@ -146,12 +150,17 @@ def main() -> None:
         type=int,
         default=None,
         metavar="N",
-        help="임베딩 대상 노드 수 제한 (--embed-only 와 함께 사용, 테스트용)",
+        help="임베딩 대상 청크 수 제한 (--embed-only 와 함께 사용, 테스트용)",
+    )
+    parser.add_argument(
+        "--chunk-dry",
+        action="store_true",
+        help="청킹 계획만 출력하고 임베딩 API 호출 없이 종료 (--embed-only 와 함께 사용)",
     )
     args = parser.parse_args()
 
     if args.embed_only:
-        run_embed_only(limit=args.limit)
+        run_embed_only(limit=args.limit, dry_run=args.chunk_dry)
         return
 
     api_key = os.getenv("LAW_API_KEY")
