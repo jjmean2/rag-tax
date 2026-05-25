@@ -150,6 +150,25 @@ class PostgresStore:
     # 검색
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _build_article_context(nodes: list[dict[str, Any]]) -> str:
+        """노드 목록을 LLM 컨텍스트용 텍스트로 조립한다."""
+        indent = ["", "  ", "    ", "      "]
+        lines = []
+        for n in sorted(nodes, key=lambda x: x["order_no"]):
+            pad = indent[min(n["depth"], 3)]
+            ref = n["ref"] or ""
+            title_part = f" ({n['title']})" if n.get("title") else ""
+            content = n["content"] or ""
+            prefix = f"{pad}{ref}{title_part}".rstrip()
+            if content:
+                line = f"{prefix} {content}".strip() if prefix.strip() else content
+            else:
+                line = prefix
+            if line.strip():
+                lines.append(line)
+        return "\n".join(lines)
+
     def search_sections(
         self,
         as_of: date | None,
@@ -220,9 +239,54 @@ class PostgresStore:
                     )
                 nodes = cur.fetchall()
 
+                # 매칭 노드 → 조(depth=0) 루트 매핑
+                root_ids: list[str] = []
+                root_ids_set: set[str] = set()
+                node_to_root: dict[str, str] = {}
+                for n in nodes:
+                    root_id = (
+                        n["parent_id"] if (n["depth"] > 0 and n["parent_id"]) else n["id"]
+                    )
+                    node_to_root[n["id"]] = root_id
+                    if root_id not in root_ids_set:
+                        root_ids_set.add(root_id)
+                        root_ids.append(root_id)
+
+                # 조 루트의 전체 서브트리(항/호/목 포함)를 recursive CTE로 일괄 조회
+                context_by_root: dict[str, list[dict[str, Any]]] = {
+                    rid: [] for rid in root_ids
+                }
+                root_node_ref: dict[str, str] = {}
+                if root_ids:
+                    cur.execute(
+                        """
+                        WITH RECURSIVE subtree AS (
+                            SELECT id, parent_id, node_type, ref, title,
+                                   content, depth, order_no,
+                                   id AS root_id
+                            FROM document_nodes
+                            WHERE id = ANY(%s::text[])
+                            UNION ALL
+                            SELECT n.id, n.parent_id, n.node_type, n.ref, n.title,
+                                   n.content, n.depth, n.order_no,
+                                   s.root_id
+                            FROM document_nodes n
+                            JOIN subtree s ON n.parent_id = s.id
+                        )
+                        SELECT * FROM subtree ORDER BY root_id, order_no
+                        """,
+                        (root_ids,),
+                    )
+                    for cn in cur.fetchall():
+                        context_by_root[cn["root_id"]].append(cn)
+                        if cn["depth"] == 0:
+                            root_node_ref[cn["root_id"]] = cn["ref"] or ""
+
                 # 인용 관계 일괄 조회
                 node_ids = [n["id"] for n in nodes]
-                citations_by_node: dict[str, list[dict[str, Any]]] = {nid: [] for nid in node_ids}
+                citations_by_node: dict[str, list[dict[str, Any]]] = {
+                    nid: [] for nid in node_ids
+                }
                 if node_ids:
                     cur.execute(
                         """
@@ -239,11 +303,12 @@ class PostgresStore:
         results: list[dict[str, Any]] = []
         for n in nodes:
             v = version_map[n["version_id"]]
-            # 항 노드면 "제19조 ①", 조 노드면 "제19조" 형태로 표시 참조 구성
-            if n["parent_ref"]:
-                section_ref = f"{n['parent_ref']} {n['ref']}".strip()
-            else:
-                section_ref = n["ref"] or ""
+            root_id = node_to_root[n["id"]]
+            article_ref = root_node_ref.get(root_id, n["parent_ref"] or "")
+            section_ref = (
+                f"{n['parent_ref']} {n['ref']}".strip() if n["parent_ref"] else n["ref"] or ""
+            )
+            context_text = self._build_article_context(context_by_root.get(root_id, []))
 
             results.append(
                 {
@@ -257,11 +322,11 @@ class PostgresStore:
                     "date": v["publish_date"],
                     "nodeType": n["node_type"],
                     "depth": n["depth"],
+                    "articleRef": article_ref,
                     "sectionRef": section_ref,
                     "heading": n["node_title"],
-                    "parentRef": n["parent_ref"],
-                    "parentTitle": n["parent_title"],
                     "snippet": n["content"],
+                    "context": context_text,
                     "semanticScore": float(n.get("semantic_score") or 0.0),
                     "citations": citations_by_node.get(n["id"], []),
                 }

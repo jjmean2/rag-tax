@@ -58,14 +58,14 @@ def tokenize(value: str) -> list[str]:
 def keyword_score(query_tokens: list[str], section: dict[str, Any], title: str) -> float:
     title_tokens = tokenize(title)
     ref_tokens = tokenize(section.get("sectionRef") or "")
-    content_tokens = tokenize(section["snippet"])
+    context_tokens = tokenize(section.get("context") or section.get("snippet") or "")
     score = 0.0
     for token in query_tokens:
         if token in title_tokens:
             score += 2.5
         if token in ref_tokens:
             score += 2.0
-        score += content_tokens.count(token)
+        score += context_tokens.count(token)
     return score
 
 
@@ -81,9 +81,10 @@ def build_summary(query: str, ranked_results: list[dict[str, Any]]) -> dict[str,
     summary_lines = []
     summary_citations = []
     for result in top_results:
+        context_body = result.get("context") or result.get("snippet") or ""
         sentence = (
-            f"{result['docTypeLabel']} {result['title']} {result['sectionRef'] or ''}는 "
-            f"{result['snippet']}"
+            f"{result['docTypeLabel']} {result['title']} {result['sectionRef'] or ''}:\n"
+            f"{context_body}"
         ).strip()
         summary_lines.append(sentence)
         summary_citations.append(
@@ -160,9 +161,11 @@ def search(request: SearchRequest) -> dict[str, Any]:
                 "authorityLabel": AUTHORITY_LABELS.get(section["authority"], section["authority"]),
                 "date": section["date"],
                 "score": round(combined_score, 4),
+                "articleRef": section.get("articleRef"),
                 "sectionRef": section.get("sectionRef"),
                 "heading": section.get("heading"),
-                "snippet": section["snippet"],
+                "snippet": section.get("snippet"),
+                "context": section.get("context"),
                 "citations": section["citations"],
             }
         )
