@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.embeddings import embed_text
-from app.llm import generate_answer
+from app.llm import generate_answer, generate_hypothetical_doc
 from app.storage import PostgresStore
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -123,11 +123,26 @@ def search(request: SearchRequest) -> dict[str, Any]:
     filters = request.filters or SearchFilters()
 
     timings: dict[str, float] = {}
+    hypo_doc: str | None = None
     try:
         t0 = time.perf_counter()
-        query_embedding = embed_text(request.query)
-        timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
+        hypo_doc = generate_hypothetical_doc(request.query)
+        timings["hyde_ms"] = round((time.perf_counter() - t0) * 1000)
+        print(f"[hyde]\n{hypo_doc}", flush=True)
 
+        t0 = time.perf_counter()
+        query_embedding = embed_text(hypo_doc)
+        timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
+    except Exception:
+        hypo_doc = None
+        try:
+            t0 = time.perf_counter()
+            query_embedding = embed_text(request.query)
+            timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
+        except Exception:
+            query_embedding = None
+
+    try:
         t0 = time.perf_counter()
         sections = STORE.search_sections(
             as_of=request.asOfDate,
@@ -141,16 +156,6 @@ def search(request: SearchRequest) -> dict[str, Any]:
             status_code=503,
             detail=f"Database unavailable. Ensure schema is initialized and DATABASE_URL is reachable. {error}",
         ) from error
-    except Exception:
-        query_embedding = None
-        t0 = time.perf_counter()
-        sections = STORE.search_sections(
-            as_of=request.asOfDate,
-            doc_types=filters.docTypes,
-            authorities=filters.authority,
-            query_embedding=query_embedding,
-        )
-        timings["search_ms"] = round((time.perf_counter() - t0) * 1000)
 
     for section in sections:
         kw_score = keyword_score(query_tokens, section, section["title"])
@@ -194,7 +199,8 @@ def search(request: SearchRequest) -> dict[str, Any]:
 
     total = sum(timings.values())
     print(
-        f"[search] embed={timings.get('embed_ms')}ms  "
+        f"[search] hyde={timings.get('hyde_ms')}ms  "
+        f"embed={timings.get('embed_ms')}ms  "
         f"search={timings.get('search_ms')}ms  "
         f"llm={timings.get('llm_ms')}ms  "
         f"total={total}ms",
@@ -206,6 +212,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
         "results": ranked_results[:10],
         "debug": {
             "queryTokens": query_tokens,
+            "hypotheticalDoc": hypo_doc,
             "semanticSearch": True,
             "totalMatches": len(ranked_results),
             "timings": timings,

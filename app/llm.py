@@ -1,4 +1,4 @@
-"""LLM 기반 답변 생성."""
+"""LLM 기반 답변 생성 및 HyDE(Hypothetical Document Embeddings) 지원."""
 
 from __future__ import annotations
 
@@ -7,6 +7,30 @@ from typing import Any
 from openai import OpenAI
 
 ANSWER_MODEL = "gpt-4o-mini"
+
+_HYDE_SYSTEM = """\
+당신은 한국 세법 전문가입니다.
+아래 질문에 답할 것으로 예상되는 한국 세법 조문 내용을 작성하세요.
+실제 법조문 스타일로 3-5문장으로 작성하세요.
+정확성보다 스타일이 중요합니다 — 검색 임베딩 생성용으로만 사용됩니다.\
+"""
+
+
+def generate_hypothetical_doc(query: str, model: str = ANSWER_MODEL) -> str:
+    """질문을 법조문 스타일 가상 문서로 변환한다 (HyDE)."""
+    client = OpenAI()
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": _HYDE_SYSTEM},
+            {"role": "user", "content": query},
+        ],
+        temperature=0.0,
+        max_tokens=200,
+    )
+    return resp.choices[0].message.content or query
+
+
 
 _SYSTEM_PROMPT = """\
 당신은 한국 세법 전문 AI 어시스턴트입니다.
@@ -21,8 +45,14 @@ _SYSTEM_PROMPT = """\
 """
 
 
-def _build_context(results: list[dict[str, Any]]) -> str:
+# result 하나당 허용할 최대 글자 수 (~1300 한국어 토큰)
+_CHARS_PER_RESULT = 2000
+
+
+def _build_context(results: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """컨텍스트 문자열과 result별 디버그 정보를 반환한다."""
     parts = []
+    debug_info = []
     for i, r in enumerate(results, 1):
         header = (
             f"[{i}] {r.get('title', '')} {r.get('sectionRef') or r.get('articleRef') or ''}".strip()
@@ -30,9 +60,22 @@ def _build_context(results: list[dict[str, Any]]) -> str:
         # embed_text: 실제 임베딩된 텍스트 (청크 전체, 컨텍스트 프리픽스 포함)
         # context: 조 전체 서브트리 (fallback)
         # snippet: 매칭 노드 본문만 (last resort)
-        body = r.get("embedText") or r.get("context") or r.get("snippet") or ""
+        raw_body = r.get("embedText") or r.get("context") or r.get("snippet") or ""
+        source = "embedText" if r.get("embedText") else ("context" if r.get("context") else "snippet")
+        truncated = len(raw_body) > _CHARS_PER_RESULT
+        body = raw_body[:_CHARS_PER_RESULT] + ("…" if truncated else "")
         parts.append(f"{header}\n{body}")
-    return "\n\n".join(parts)
+        debug_info.append({
+            "idx": i,
+            "title": r.get("title", ""),
+            "sectionRef": r.get("sectionRef") or r.get("articleRef") or "",
+            "source": source,
+            "chars_raw": len(raw_body),
+            "chars_sent": len(body),
+            "truncated": truncated,
+            "score": round(r.get("semanticScore", 0.0), 4),
+        })
+    return "\n\n".join(parts), debug_info
 
 
 def generate_answer(
@@ -49,11 +92,19 @@ def generate_answer(
         }
 
     client = OpenAI()
-    context = _build_context(results[:5])
+    context, ctx_debug = _build_context(results[:5])
     user_msg = f"[참고 법령 조문]\n{context}\n\n[질문]\n{query}"
 
     input_chars = len(_SYSTEM_PROMPT) + len(user_msg)
     print(f"[llm] input_chars={input_chars} (~{round(input_chars / 1.5)} tokens est.)", flush=True)
+    for d in ctx_debug:
+        trunc_mark = f" TRUNCATED({d['chars_raw']}→{d['chars_sent']})" if d["truncated"] else ""
+        print(
+            f"[llm]   [{d['idx']}] {d['title']} {d['sectionRef']}"
+            f"  src={d['source']}  chars={d['chars_sent']}"
+            f"  score={d['score']}{trunc_mark}",
+            flush=True,
+        )
 
     resp = client.chat.completions.create(
         model=model,
