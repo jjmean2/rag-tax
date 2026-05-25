@@ -26,18 +26,5 @@ services:
     environment:
       ADMINER_DEFAULT_SERVER: db
 
-  db-init:
-    build:
-      context: .
-      dockerfile: Dockerfile.db-init
-    profiles: ["tools"]
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/rag_tax
-    command: ["uv", "run", "python", "-m", "app.bootstrap", "init-and-seed"]
-    restart: "no"
-
 volumes:
   postgres_data:
