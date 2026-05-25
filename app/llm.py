@@ -21,18 +21,16 @@ _SYSTEM_PROMPT = """\
 """
 
 
-_CONTEXT_CHAR_LIMIT = 800  # 결과당 최대 글자 수 (~400 한글 토큰)
-
-
 def _build_context(results: list[dict[str, Any]]) -> str:
     parts = []
     for i, r in enumerate(results, 1):
         header = (
             f"[{i}] {r.get('title', '')} {r.get('sectionRef') or r.get('articleRef') or ''}".strip()
         )
-        body = r.get("context") or r.get("snippet") or ""
-        if len(body) > _CONTEXT_CHAR_LIMIT:
-            body = body[:_CONTEXT_CHAR_LIMIT] + "…"
+        # embed_text: 실제 임베딩된 텍스트 (청크 전체, 컨텍스트 프리픽스 포함)
+        # context: 조 전체 서브트리 (fallback)
+        # snippet: 매칭 노드 본문만 (last resort)
+        body = r.get("embedText") or r.get("context") or r.get("snippet") or ""
         parts.append(f"{header}\n{body}")
     return "\n\n".join(parts)
 

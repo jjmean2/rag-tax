@@ -151,13 +151,15 @@ class PostgresStore:
                                n.content,
                                n.depth,
                                n.parent_id,
+                               c.embed_text,
                                0.0::double precision AS semantic_score,
                                p.ref       AS parent_ref,
                                p.title     AS parent_title
-                        FROM document_nodes n
+                        FROM document_chunks c
+                        JOIN document_nodes n  ON n.id = c.node_id
                         LEFT JOIN document_nodes p ON p.id = n.parent_id
-                        WHERE n.version_id = ANY(%s::text[])
-                          AND n.embedding IS NOT NULL
+                        WHERE c.version_id = ANY(%s::text[])
+                          AND c.embedding IS NOT NULL
                         ORDER BY n.version_id, n.order_no
                         LIMIT %s
                         """,
@@ -174,14 +176,15 @@ class PostgresStore:
                                n.content,
                                n.depth,
                                n.parent_id,
-                               1 - (n.embedding <=> %s) AS semantic_score,
+                               c.embed_text,
+                               1 - (c.embedding <=> %s) AS semantic_score,
                                p.ref       AS parent_ref,
                                p.title     AS parent_title
-                        FROM document_nodes n
+                        FROM document_chunks c
+                        JOIN document_nodes n  ON n.id = c.node_id
                         LEFT JOIN document_nodes p ON p.id = n.parent_id
-                        WHERE n.version_id = ANY(%s::text[])
-                          AND n.embedding IS NOT NULL
-                        ORDER BY n.embedding <=> %s
+                        WHERE c.version_id = ANY(%s::text[])
+                        ORDER BY c.embedding <=> %s
                         LIMIT %s
                         """,
                         (
@@ -298,6 +301,7 @@ class PostgresStore:
                     "sectionRef": section_ref,
                     "heading": n["node_title"],
                     "snippet": n["content"],
+                    "embedText": n.get("embed_text"),
                     "context": context_text,
                     "semanticScore": float(n.get("semantic_score") or 0.0),
                     "citations": citations_by_node.get(n["id"], []),

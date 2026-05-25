@@ -215,8 +215,7 @@ class IngestWriter:
                             title           = EXCLUDED.title,
                             order_no        = EXCLUDED.order_no,
                             token_count     = EXCLUDED.token_count,
-                            embedding       = NULL,
-                            embedding_model = NULL
+                            chunk_status    = NULL
                         RETURNING (xmax = 0) AS is_insert
                         """,
                         (
@@ -266,14 +265,13 @@ class IngestWriter:
                 # depth 제한 없이 미처리 노드 전체 조회
                 cur.execute(
                     """
-                    SELECT dn.id, dn.parent_id, dn.depth, dn.order_no,
+                    SELECT dn.id, dn.version_id, dn.parent_id, dn.depth, dn.order_no,
                            dn.ref, dn.title, dn.content,
                            d.title AS doc_title
                     FROM document_nodes dn
                     JOIN document_versions dv ON dv.id = dn.version_id
                     JOIN documents d          ON d.id  = dv.document_id
-                    WHERE dn.embedding       IS NULL
-                      AND dn.embedding_model IS NULL
+                    WHERE dn.chunk_status IS NULL
                     ORDER BY dn.version_id, dn.depth, dn.order_no
                     """
                 )
@@ -324,7 +322,7 @@ class IngestWriter:
             _print_chunk_plan(chunk_assignments, covered_ids)
             return len(chunk_assignments)
 
-        # 임베딩 생성 및 저장
+        # 임베딩 생성 및 document_chunks 저장
         with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:  # type: ignore[call-overload]
             register_vector(conn)
             total = 0
@@ -335,10 +333,23 @@ class IngestWriter:
                 embeddings = embed_texts(texts)
 
                 with conn.cursor() as cur:
-                    for (node_id, _), emb in zip(batch, embeddings, strict=True):
+                    for (node_id, embed_text), emb in zip(batch, embeddings, strict=True):
+                        version_id = nodes_by_id[node_id]["version_id"]
                         cur.execute(
-                            "UPDATE document_nodes SET embedding=%s, embedding_model=%s WHERE id=%s",
-                            (Vector(emb), model, node_id),
+                            """
+                            INSERT INTO document_chunks
+                                (id, version_id, node_id, embed_text, embedding, embedding_model)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO UPDATE
+                            SET embed_text      = EXCLUDED.embed_text,
+                                embedding       = EXCLUDED.embedding,
+                                embedding_model = EXCLUDED.embedding_model
+                            """,
+                            (node_id, version_id, node_id, embed_text, Vector(emb), model),
+                        )
+                        cur.execute(
+                            "UPDATE document_nodes SET chunk_status = 'chunk-root' WHERE id = %s",
+                            (node_id,),
                         )
                 conn.commit()
                 total += len(batch)
@@ -349,15 +360,30 @@ class IngestWriter:
                     file=sys.stderr,
                 )
 
-            # 청크에 포함된 자식 노드를 'parent-chunk'로 표시해 재처리 방지
+            # chunk-child: 청크 루트의 자손
             if covered_ids:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE document_nodes SET embedding_model = 'parent-chunk'"
+                        "UPDATE document_nodes SET chunk_status = 'chunk-child'"
                         " WHERE id = ANY(%s::text[])",
                         (covered_ids,),
                     )
                 conn.commit()
+
+            # chunk-split: 배치에 있었지만 청크 루트도 자손도 아닌 노드
+            # (서브트리가 너무 커서 자식으로 분기됨 — 내용은 자식 청크의 context prefix에 포함)
+            # limit 사용 시 처리가 불완전하므로 마킹하지 않음
+            if limit is None:
+                all_assigned_ids = chunk_root_ids | set(covered_ids)
+                split_ids = [r["id"] for r in rows if r["id"] not in all_assigned_ids]
+                if split_ids:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE document_nodes SET chunk_status = 'chunk-split'"
+                            " WHERE id = ANY(%s::text[])",
+                            (split_ids,),
+                        )
+                    conn.commit()
 
         print()
         return total
@@ -366,21 +392,22 @@ class IngestWriter:
         """임베딩 커버리지를 검증한다.
 
         확인 항목:
-        1. 고아 노드: content가 있으나 embedding도 embedding_model도 없는 노드
-        2. 잘못된 parent-chunk: 'parent-chunk'로 마킹됐지만 embedding을 가진 조상이 없는 노드
+        1. 고아 노드: content가 있으나 chunk_status가 NULL인 채로 남은 노드
+        2. 잘못된 chunk-child: 'chunk-child'로 마킹됐지만 'chunk-root' 조상이 없는 노드
         """
         with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:  # type: ignore[call-overload]
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT
-                        COUNT(*)                                                             AS total,
-                        COUNT(*) FILTER (WHERE embedding IS NOT NULL)                       AS chunk_roots,
-                        COUNT(*) FILTER (WHERE embedding_model = 'parent-chunk')            AS covered,
-                        COUNT(*) FILTER (WHERE embedding IS NULL AND embedding_model IS NULL)
-                                                                                            AS unprocessed,
-                        COUNT(*) FILTER (WHERE embedding IS NULL AND embedding_model IS NULL
-                                           AND content IS NOT NULL AND content != '')       AS orphaned
+                        COUNT(*)                                                    AS total,
+                        COUNT(*) FILTER (WHERE chunk_status = 'chunk-root')         AS chunk_roots,
+                        COUNT(*) FILTER (WHERE chunk_status = 'chunk-child')        AS covered,
+                        COUNT(*) FILTER (WHERE chunk_status = 'chunk-split')        AS split,
+                        COUNT(*) FILTER (WHERE chunk_status IS NULL)                AS unprocessed,
+                        COUNT(*) FILTER (WHERE chunk_status IS NULL
+                                           AND content IS NOT NULL
+                                           AND content != '')                       AS orphaned
                     FROM document_nodes
                     """
                 )
@@ -390,8 +417,7 @@ class IngestWriter:
                     """
                     SELECT id, version_id, depth, ref, LEFT(content, 60) AS content_preview
                     FROM document_nodes
-                    WHERE embedding IS NULL
-                      AND embedding_model IS NULL
+                    WHERE chunk_status IS NULL
                       AND content IS NOT NULL
                       AND content != ''
                     LIMIT 10
@@ -399,31 +425,28 @@ class IngestWriter:
                 )
                 orphaned_rows: list[dict] = cur.fetchall()  # type: ignore[assignment]
 
-                # 모든 노드를 메모리로 읽어 parent-chunk 검증
-                cur.execute(
-                    "SELECT id, parent_id, embedding, embedding_model FROM document_nodes"
-                )
+                # chunk-child 노드 중 chunk-root 조상이 없는 것 탐색
+                cur.execute("SELECT id, parent_id, chunk_status FROM document_nodes")
                 all_nodes: dict[str, dict] = {r["id"]: r for r in cur.fetchall()}  # type: ignore[assignment]
 
-        # parent-chunk 노드 중 embedded 조상이 없는 것 탐색
-        invalid_parent_chunks: list[str] = []
+        invalid_chunk_children: list[str] = []
         for node_id, node in all_nodes.items():
-            if node["embedding_model"] != "parent-chunk":
+            if node["chunk_status"] != "chunk-child":
                 continue
             current = node
             found = False
             while current["parent_id"] and current["parent_id"] in all_nodes:
                 current = all_nodes[current["parent_id"]]
-                if current["embedding"] is not None:
+                if current["chunk_status"] == "chunk-root":
                     found = True
                     break
             if not found:
-                invalid_parent_chunks.append(node_id)
+                invalid_chunk_children.append(node_id)
 
-        valid = stats["orphaned"] == 0 and len(invalid_parent_chunks) == 0
+        valid = stats["orphaned"] == 0 and len(invalid_chunk_children) == 0
         return {
             "valid": valid,
             "stats": stats,
             "orphaned_nodes": orphaned_rows,
-            "invalid_parent_chunks": invalid_parent_chunks[:10],
+            "invalid_chunk_children": invalid_chunk_children[:10],
         }

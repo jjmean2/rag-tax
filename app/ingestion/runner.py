@@ -115,21 +115,22 @@ def run_verify_embed() -> None:
     s = result["stats"]
     print(
         f"\n  전체 노드      : {s['total']}"
-        f"\n  청크 루트      : {s['chunk_roots']}  (embedding 있음)"
-        f"\n  커버된 노드    : {s['covered']}  (parent-chunk)"
-        f"\n  미처리 노드    : {s['unprocessed']}  (embedding/model 모두 NULL)"
+        f"\n  청크 루트      : {s['chunk_roots']}  (chunk-root)"
+        f"\n  커버된 노드    : {s['covered']}  (chunk-child)"
+        f"\n  분기된 노드    : {s['split']}  (chunk-split)"
+        f"\n  미처리 노드    : {s['unprocessed']}  (NULL)"
         f"\n  고아 노드      : {s['orphaned']}  (content 있으나 미처리)"
     )
     if result["orphaned_nodes"]:
         print("\n[!] 고아 노드 (처음 10개):")
         for n in result["orphaned_nodes"]:
             print(f"    {n['id']}  depth={n['depth']}  ref={n['ref']}  '{n['content_preview']}'")
-    if result["invalid_parent_chunks"]:
-        print("\n[!] 잘못된 parent-chunk (처음 10개):")
-        for nid in result["invalid_parent_chunks"]:
+    if result["invalid_chunk_children"]:
+        print("\n[!] 잘못된 chunk-child (처음 10개):")
+        for nid in result["invalid_chunk_children"]:
             print(f"    {nid}")
     if result["valid"]:
-        print("\n✓ 검증 통과: 고아 노드 없음, parent-chunk 마킹 정상")
+        print("\n✓ 검증 통과: 고아 노드 없음, chunk 마킹 정상")
     else:
         print("\n✗ 검증 실패: 위 항목 확인 필요")
 
