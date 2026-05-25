@@ -17,9 +17,8 @@ db-up:          ## 개발 DB 시작 (백그라운드)
 db-down:        ## 개발 DB 중단 (데이터 유지)
 	docker compose stop db
 
-db-init:        ## 스키마 생성 + 샘플 시드 (최초 1회 또는 리셋 후)
-	docker compose build db-init
-	docker compose --profile tools run --rm db-init
+db-init:        ## 마이그레이션 적용 (최초 1회 또는 새 마이그레이션 추가 후)
+	DATABASE_URL=$(DATABASE_URL) uv run python -m app.db.migrate
 
 db-reset:       ## DB 볼륨 삭제 후 초기화 (데이터 전체 삭제)
 	docker compose down -v

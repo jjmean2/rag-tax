@@ -21,7 +21,7 @@ class IngestWriter:
         self.dsn = dsn or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 
     def upsert(self, doc: RawDocument) -> tuple[int, int]:
-        """문서·버전·섹션을 upsert한다. (신규 섹션 수, 갱신 섹션 수) 반환."""
+        """문서·버전·노드 트리를 upsert한다. (신규 노드 수, 갱신 노드 수) 반환."""
         doc_id = f"{doc.source_system}:{doc.source_id}"
         v = doc.version
         content_hash = hashlib.md5(v.raw_text.encode()).hexdigest()
@@ -49,38 +49,48 @@ class IngestWriter:
                     """
                     INSERT INTO document_versions
                         (id, document_id, version_label, effective_from, effective_to,
-                         publish_date, status, raw_text, normalized_text,
-                         hash_sha256, metadata_json)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                         publish_date, status, raw_text, hash_sha256, metadata_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (id) DO NOTHING
                     """,
                     (version_id, doc_id, v.version_label,
                      v.effective_from, v.effective_to, v.publish_date,
-                     v.status, v.raw_text, v.raw_text,
-                     content_hash, psycopg.types.json.Jsonb(v.metadata)),
+                     v.status, v.raw_text, content_hash,
+                     psycopg.types.json.Jsonb(v.metadata)),
                 )
 
+                # 노드를 depth 순으로 정렬해 부모가 항상 먼저 삽입되도록 보장
+                sorted_nodes = sorted(v.nodes, key=lambda n: n.depth)
+
                 inserted = updated = 0
-                for sec in v.sections:
-                    section_id = f"{version_id}:{sec.section_ref or sec.order_no}"
+                for node in sorted_nodes:
+                    node_db_id = f"{version_id}:{node.node_id}"
+                    parent_db_id = (
+                        f"{version_id}:{node.parent_id}"
+                        if node.parent_id else None
+                    )
+                    token_count = len(node.content.split()) if node.content else None
+
                     cur.execute(
                         """
-                        INSERT INTO document_sections
-                            (id, version_id, section_type, section_ref, heading,
-                             content, order_no, token_count, metadata_json)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                        INSERT INTO document_nodes
+                            (id, version_id, parent_id, node_type, ref, title,
+                             content, depth, order_no, token_count, metadata_json)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                         ON CONFLICT (id) DO UPDATE
                         SET content       = EXCLUDED.content,
-                            heading       = EXCLUDED.heading,
+                            title         = EXCLUDED.title,
                             order_no      = EXCLUDED.order_no,
                             token_count   = EXCLUDED.token_count,
-                            embedding     = NULL
+                            embedding     = NULL,
+                            embedding_model = NULL
                         RETURNING (xmax = 0) AS is_insert
                         """,
-                        (section_id, version_id, sec.section_type, sec.section_ref,
-                         sec.heading, sec.content, sec.order_no,
-                         len(sec.content.split()),
-                         psycopg.types.json.Jsonb(sec.metadata)),
+                        (node_db_id, version_id, parent_db_id,
+                         node.node_type, node.ref, node.title,
+                         node.content, node.depth, node.order_no,
+                         token_count,
+                         psycopg.types.json.Jsonb(node.metadata)),
                     )
                     row = cur.fetchone()
                     if row and row["is_insert"]:
@@ -92,20 +102,34 @@ class IngestWriter:
 
         return inserted, updated
 
-    def embed_pending(self, batch_size: int = EMBED_BATCH_SIZE) -> int:
-        """embedding IS NULL 인 섹션을 모두 임베딩한다. 처리한 섹션 수 반환."""
+    def embed_pending(
+        self,
+        batch_size: int = EMBED_BATCH_SIZE,
+        model: str = "snunlp/KR-SBERT-V40K-klueNLI-augSTS",
+    ) -> int:
+        """embedding IS NULL 인 노드를 일괄 임베딩한다. 처리 수 반환.
+
+        depth <= 1 (조·항) 이고 content 가 있는 노드만 임베딩 대상으로 삼는다.
+        호·목은 너무 짧고 항 임베딩이 커버한다.
+        """
         from app.embeddings import embed_texts
 
         with psycopg.connect(self.dsn, row_factory=psycopg.rows.dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT ds.id, d.title, ds.section_ref, ds.heading, ds.content
-                    FROM document_sections ds
-                    JOIN document_versions dv ON dv.id = ds.version_id
+                    SELECT dn.id,
+                           d.title  AS doc_title,
+                           dn.ref,
+                           dn.title AS node_title,
+                           dn.content
+                    FROM document_nodes dn
+                    JOIN document_versions dv ON dv.id = dn.version_id
                     JOIN documents d          ON d.id  = dv.document_id
-                    WHERE ds.embedding IS NULL
-                    ORDER BY ds.created_at, ds.id
+                    WHERE dn.embedding IS NULL
+                      AND dn.content   IS NOT NULL
+                      AND dn.depth     <= 1
+                    ORDER BY dn.created_at, dn.id
                     """
                 )
                 rows = cur.fetchall()
@@ -117,12 +141,12 @@ class IngestWriter:
             total = 0
 
             for i in range(0, len(rows), batch_size):
-                batch = rows[i : i + batch_size]
+                batch = rows[i: i + batch_size]
                 texts = [
                     " ".join(filter(None, [
-                        r["title"],
-                        r["section_ref"] or "",
-                        r["heading"] or "",
+                        r["doc_title"],
+                        r["ref"] or "",
+                        r["node_title"] or "",
                         r["content"],
                     ]))
                     for r in batch
@@ -132,8 +156,12 @@ class IngestWriter:
                 with conn.cursor() as cur:
                     for row, emb in zip(batch, embeddings, strict=True):
                         cur.execute(
-                            "UPDATE document_sections SET embedding = %s WHERE id = %s",
-                            (Vector(emb), row["id"]),
+                            """
+                            UPDATE document_nodes
+                            SET embedding = %s, embedding_model = %s
+                            WHERE id = %s
+                            """,
+                            (Vector(emb), model, row["id"]),
                         )
                 conn.commit()
                 total += len(batch)
