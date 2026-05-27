@@ -30,16 +30,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  adminer:
-    image: adminer:4
-    profiles: ["dev"]
-    depends_on:
-      db:
-        condition: service_healthy
-    ports:
-      - "8080:8080"
-    environment:
-      ADMINER_DEFAULT_SERVER: db
 
 volumes:
   postgres_data:
