@@ -1,0 +1,13 @@
+.git
+.env
+.venv
+__pycache__
+*.pyc
+*.pyo
+pdfs/
+docs/
+schemas/
+eval/
+.DS_Store
+README.md
+CLAUDE.md

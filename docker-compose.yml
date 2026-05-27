@@ -15,9 +15,24 @@ services:
       timeout: 3s
       retries: 20
       start_period: 5s
+    restart: unless-stopped
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/rag_tax
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LAW_API_KEY: ${LAW_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
   adminer:
     image: adminer:4
+    profiles: ["dev"]
     depends_on:
       db:
         condition: service_healthy
