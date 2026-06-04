@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   api:
-    build: .
+    image: ghcr.io/jjmean2/rag-tax:latest
     ports:
       - "8000:8000"
     environment:
