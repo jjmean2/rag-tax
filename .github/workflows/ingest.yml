@@ -1,0 +1,33 @@
+name: Ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '수집 모드'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full          # 수집 + 임베딩
+          - collect-only  # 수집만 (임베딩 생략)
+          - embed-only    # 미완료 임베딩만
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run ingestion on VM
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 60m
+          script: |
+            cd ~/rag-tax
+            case "${{ inputs.mode }}" in
+              full)         docker compose run --rm api python -m app.ingestion.runner ;;
+              collect-only) docker compose run --rm api python -m app.ingestion.runner --skip-embed ;;
+              embed-only)   docker compose run --rm api python -m app.ingestion.runner --embed-only ;;
+            esac
