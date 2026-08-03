@@ -12,6 +12,8 @@
       "text": "Use Conventional Commits format (<type>(<scope>): <subject>).\n\n1. HEADER RULE:\n- Write the header strictly in English.\n- Use the imperative mood, starting with a lowercase verb (e.g., 'fix...', 'add...', 'refactor...'), and do not end with a period.\n- Keep it under 50 characters.\n\n2. BODY RULE:\n- Default to a single-line commit. Do NOT generate a body for simple, standard, or self-explanatory changes.\n- Generate a body strictly in Korean ONLY for complex logic changes, breaking changes, or critical bug fixes that require context.\n- When writing the body, focus strictly on 'Why' this change was made, keep it extremely concise, and separate it from the header with a blank line."
     }
   ],
+  "peacock.remoteColor": "#F9E6D8",
+  "peacock.color": "#e48b4c",
   "workbench.colorCustomizations": {
     "activityBar.activeBackground": "#ffffff",
     "activityBar.background": "#ffffff",
@@ -27,8 +29,6 @@
     "commandCenter.foreground": "#15202b",
     "sash.hoverBorder": "#ffffff",
     "statusBar.background": "#f9e6d8",
-    "statusBar.debuggingBackground": "#f9e6d8",
-    "statusBar.debuggingForeground": "#15202b",
     "statusBar.foreground": "#15202b",
     "statusBarItem.hoverBackground": "#f2caac",
     "statusBarItem.remoteBackground": "#1aa655",
@@ -36,6 +36,8 @@
     "titleBar.activeBackground": "#f9e6d8",
     "titleBar.activeForeground": "#15202b",
     "titleBar.inactiveBackground": "#f9e6d899",
-    "titleBar.inactiveForeground": "#15202b99"
+    "titleBar.inactiveForeground": "#15202b99",
+    "statusBar.debuggingBackground": "#f9e6d8",
+    "statusBar.debuggingForeground": "#15202b"
   }
 }
